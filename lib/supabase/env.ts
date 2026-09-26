@@ -18,6 +18,9 @@ export function validarSupabaseEnv(
     );
   }
 
+  verificarCaracteres("NEXT_PUBLIC_SUPABASE_URL", url);
+  verificarCaracteres("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", publishableKey);
+
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -41,6 +44,23 @@ export function validarSupabaseEnv(
   }
 
   return { url: parsed.origin, publishableKey };
+}
+
+/**
+ * Solo ASCII visible (sin espacios). Detecta lo que se cuela al copiar y
+ * pegar: espacios, BOM, espacios de ancho cero, letras parecidas de otros
+ * alfabetos (p. ej. "а" cirílica). new URL() los acepta y después el DNS falla
+ * con un "fetch failed" que no dice nada.
+ */
+function verificarCaracteres(variable: string, valor: string) {
+  const i = [...valor].findIndex((c) => !/^[\x21-\x7e]$/.test(c));
+  if (i === -1) return;
+  const c = [...valor][i];
+  const codigo = `U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}`;
+  throw new Error(
+    `${variable} tiene un carácter inválido (${codigo}) en la posición ${i + 1}. ` +
+      "Escribila de nuevo a mano en .env.local.",
+  );
 }
 
 export function supabaseEnv(): SupabaseEnv {

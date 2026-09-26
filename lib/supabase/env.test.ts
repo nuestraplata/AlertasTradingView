@@ -46,6 +46,24 @@ describe("validarSupabaseEnv", () => {
     );
   });
 
+  it.each([
+    ["espacio de ancho cero", "https://abcd​efgh.supabase.co", "U+200B", 13],
+    ["BOM al principio", "﻿https://abcdefgh.supabase.co", "U+FEFF", 1],
+    ["a cirílica", "https://аbcdefgh.supabase.co", "U+0430", 9],
+    ["espacio al final", `${URL_OK} `, "U+0020", URL_OK.length + 1],
+    ["espacio no separable", `${URL_OK} `, "U+00A0", URL_OK.length + 1],
+  ])("rechaza la URL con %s indicando carácter y posición", (_caso, url, codigo, pos) => {
+    expect(() => validarSupabaseEnv(url, KEY_OK)).toThrow(
+      `NEXT_PUBLIC_SUPABASE_URL tiene un carácter inválido (${codigo}) en la posición ${pos}.`,
+    );
+  });
+
+  it("rechaza caracteres invisibles en la clave", () => {
+    expect(() => validarSupabaseEnv(URL_OK, `${KEY_OK}\r`)).toThrow(
+      /NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY tiene un carácter inválido \(U\+000D\)/,
+    );
+  });
+
   it("rechaza claves con otro formato (p. ej. anon JWT viejo)", () => {
     expect(() => validarSupabaseEnv(URL_OK, "eyJhbGciOiJIUzI1NiJ9.x.y")).toThrow(
       /sb_publishable_/,
