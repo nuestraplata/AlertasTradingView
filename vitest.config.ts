@@ -9,7 +9,5 @@ export default defineConfig({
     environment: "node",
     include: ["**/*.test.ts"],
     exclude: ["node_modules/**", ".next/**"],
-    // Mientras no haya tests (paso 1). Se quita cuando llegue el primero.
-    passWithNoTests: true,
   },
 });
