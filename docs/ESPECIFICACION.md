@@ -14,7 +14,15 @@ Cripto (BingX/Binance) queda para una fase posterior, separada.
 - Repo nuevo y PRIVADO, separado de EasyTrading.
 - Región: Supabase y funciones de Vercel en São Paulo (gru1) por latencia.
 - Login single-user obligatorio para toda la web (excepto el webhook).
+  Supabase Auth con email + contraseña, sin registro público (el usuario
+  se crea a mano en Supabase).
 - Secretos en variables de entorno, nunca en el código.
+- Supabase: las tablas nuevas NO se exponen automáticamente y RLS está
+  activo por defecto. Toda migración incluye GRANT explícitos para los roles
+  que la necesitan, además de las políticas RLS. Las migraciones las corre
+  Fran en el SQL Editor de Supabase.
+- Fechas y horarios de negocio siempre en hora de Argentina
+  (America/Argentina/Buenos_Aires).
 
 ## 3. Piezas
 
@@ -43,8 +51,14 @@ Cripto (BingX/Binance) queda para una fase posterior, separada.
 }
 ```
 
-- Clave inválida → rechazar, no genera nada.
+- Clave inválida → rechazar, no genera nada. Se registra solo el intento
+  (hora e IP), sin guardar el payload.
 - Todas las alertas válidas se guardan, incluso las descartadas, con motivo.
+- Clave correcta pero datos inválidos (estrategia, accion, ticker o precio
+  mal formados) → se guarda como descartada, con motivo.
+- El webhook acepta el cuerpo como application/json o text/plain
+  (TradingView manda text/plain si el mensaje no es JSON válido).
+  "precio" llega como texto y se convierte a número.
 
 ## 5. Configuración de activos (acciones)
 
@@ -55,36 +69,56 @@ Clave única: (ticker_usa, estrategia).
 Campos por activo:
 
 - ticker_usa (el de TradingView) y ticker_byma (CEDEAR). Mapeo manual
-  porque pueden no coincidir.
+  porque pueden no coincidir. El mapeo vive en una tabla aparte "tickers"
+  (ticker_usa → ticker_byma), compartida por las dos listas: se carga una
+  sola vez por ticker.
 - Siempre se opera el CEDEAR en ARS, plazo 24hs (el ticker sin sufijo,
   compatible con Instrumento.ticker de EasyTrading).
 - nominales (fijos, editables en cualquier momento)
-- entrada_usd, tp_usd, sl_usd (cargados sobre el gráfico USA)
+- nominales_max: tope de la posición abierta. Por defecto 3 × nominales,
+  editable.
+- sl_usd (cargado sobre el gráfico USA). OBLIGATORIO para poder tildar
+  "activo" u "operar hoy" (sin SL no hay protección local).
+- entrada_usd, tp_usd (cargados sobre el gráfico USA): solo anotación,
+  opcionales. Si hay entrada_usd cargada, se valida sl_usd < entrada_usd.
 - onda, sub_onda, notas (solo anotación, no afectan ninguna regla)
 - modo: PAPER | REAL (por defecto PAPER)
 - Corto plazo: tilde "activo".
 - Intradía: tilde "operar hoy", que se destilda solo al empezar cada día.
+  Se guarda como operar_hoy_fecha: el tilde cuenta como marcado solo si esa
+  fecha es hoy (hora de Argentina). No hace falta cron.
 
 ## 6. Reglas de negocio
 
 Generales:
 
 - Alertas fuera del horario de mercado (configurable) → se descartan.
+  Se usa la hora de llegada al servidor (hora de Argentina), no la "hora"
+  de la alerta. También se descartan fines de semana y feriados; los
+  feriados están en una tabla que Fran carga a mano.
 - Ticker no configurado para esa estrategia → se descarta.
 - Una alerta genera como máximo UNA orden (idempotencia por alerta).
+- Antiduplicado: una alerta idéntica (mismo ticker + estrategia + accion) a
+  otra recibida en los últimos 30 s → se descarta con motivo.
 - Toda orden vence a los 60 s si EasyTrading no la tomó → "vencida",
   no se ejecuta nunca después.
 - Nunca vender más nominales de los que hay abiertos en esa estrategia.
   Si la posición ya está cerrada (por ejemplo, el SL local ganó de mano a la
   alerta), la venta se descarta.
 - Compra con posición abierta → se suma (se promedia).
+- Compra que haría superar nominales_max → se descarta con motivo.
+- Resultado parcial:
+  - Compra parcial: se cancela el resto y la posición queda con lo ejecutado.
+  - Venta parcial: EasyTrading reintenta hasta cerrar la posición (se define
+    en sus fases).
 
 Corto plazo:
 
 - Compra: solo si el activo está tildado "activo".
 - Venta / TP / SL: vende TODA la posición de corto plazo de ese activo.
   - Etapa inicial: la posición abierta por la app.
-  - Futuro (cuando EasyTrading tenga F4, tenencia real del broker):
+  - Futuro, cuando EasyTrading tenga la "Tenencia real del broker
+    (F4 de EasyTrading)":
     tenencia total del broker MENOS la posición intradía abierta.
 
 Intradía:
@@ -126,10 +160,11 @@ Protección ante caída de conexión o alerta perdida.
 
 ## 9. Tablas (orientativo)
 
-activos, alertas (payload crudo + tipo + estado + motivo), ordenes
+tickers (ticker_usa → ticker_byma), activos, alertas (payload crudo + tipo
++ estado + motivo), intentos_rechazados (hora, IP; sin payload), ordenes
 (alerta_id único, estado, vence_en, resultado), posiciones (por activo y
 estrategia: nominales, ppc_ars, ppc_usd, sl_ars, fecha apertura),
-configuracion (horario, vencimiento).
+configuracion (horario, vencimiento), feriados (fecha, descripción).
 Cripto: tablas propias en su fase.
 
 ## 10. Fases (validar cada una antes de seguir)
@@ -139,6 +174,8 @@ WEB:
 - F1: proyecto, login, listas corto/intradía (CRUD), mapeo de tickers.
 - F2: webhook + registro de alertas + vista por tipo + botón
   "simular alerta" para probar sin TradingView. No genera órdenes.
+  Incluye un cron diario de Vercel que hace una consulta mínima a Supabase
+  para evitar que el plan Free pause el proyecto por inactividad.
 - F3: motor de reglas + órdenes pendientes + vencimiento + API EasyTrading.
 
 EASYTRADING (en su propio repo):
@@ -151,7 +188,8 @@ LUEGO:
 
 - F7: cripto (ejecutor en la nube hacia BingX/Binance; ojo, Binance bloquea
   IPs de EE.UU.).
-- F8: venta de tenencia real del broker (depende de F4 de EasyTrading).
+- F8: venta de tenencia real del broker. Depende de la "Tenencia real del
+  broker (F4 de EasyTrading)".
 
 ## 11. Reglas de trabajo con Claude Code
 
