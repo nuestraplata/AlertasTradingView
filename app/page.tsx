@@ -26,7 +26,12 @@ export default async function Home() {
             </li>
           </ul>
         ) : (
-          <p>❌ Sin conexión: {estado.error}</p>
+          <div>
+            <p>❌ Sin conexión:</p>
+            <pre className="mt-2 max-w-2xl whitespace-pre-wrap break-all font-mono text-xs">
+              {estado.error}
+            </pre>
+          </div>
         )}
       </section>
     </main>

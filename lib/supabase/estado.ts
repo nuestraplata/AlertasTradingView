@@ -1,3 +1,4 @@
+import { describirError } from "@/lib/errores";
 import { supabaseEnv } from "./env";
 
 export type EstadoSupabase =
@@ -9,15 +10,20 @@ export type EstadoSupabase =
  * publishable key. Si responde 200, la URL y la clave son correctas.
  */
 export async function verificarSupabase(): Promise<EstadoSupabase> {
+  let host = "(sin URL)";
   try {
     const { url, publishableKey } = supabaseEnv();
+    host = new URL(url).host;
     const res = await fetch(`${url}/auth/v1/settings`, {
       headers: { apikey: publishableKey },
       cache: "no-store",
       signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) {
-      return { ok: false, error: `Supabase respondió HTTP ${res.status}` };
+      return {
+        ok: false,
+        error: `Host: ${host}\nSupabase respondió HTTP ${res.status}`,
+      };
     }
     const settings = (await res.json()) as {
       disable_signup?: boolean;
@@ -29,6 +35,10 @@ export async function verificarSupabase(): Promise<EstadoSupabase> {
       emailActivo: settings.external?.email === true,
     };
   } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    console.error("[verificarSupabase] host:", host, e);
+    const aviso = /[^a-z0-9.-]|xn--/i.test(host)
+      ? "\n⚠️ El host tiene caracteres no ASCII: revisá la URL en .env.local"
+      : "";
+    return { ok: false, error: `Host: ${host}${aviso}\n${describirError(e)}` };
   }
 }
