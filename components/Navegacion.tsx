@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const PESTANIAS = [
+  { href: "/alertas", texto: "Alertas" },
   { href: "/corto", texto: "Corto plazo" },
   { href: "/intradia", texto: "Intradía" },
   { href: "/tickers", texto: "Tickers" },
