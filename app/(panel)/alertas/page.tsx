@@ -4,6 +4,7 @@ import { BotonActualizar } from "@/components/alertas/BotonActualizar";
 import { Filtros } from "@/components/alertas/Filtros";
 import { IntentosRechazados, type IntentoFila } from "@/components/alertas/IntentosRechazados";
 import { COLUMNAS_ALERTA, ListaAlertas, type AlertaFila } from "@/components/alertas/ListaAlertas";
+import { SimularAlerta } from "@/components/alertas/SimularAlerta";
 import { LIMITE_MAX, PASO, hayFiltros, leerFiltros, urlAlertas } from "@/lib/alertas/filtros";
 import { clienteConSesion } from "@/lib/auth/sesion";
 import { traducirErrorDb } from "@/lib/db/errores";
@@ -26,7 +27,7 @@ export default async function AlertasPage({ searchParams }: PageProps<"/alertas"
   if (filtros.origen) consulta = consulta.eq("origen", filtros.origen);
 
   const hace24h = new Date(ahora.getTime() - 24 * 60 * 60 * 1000).toISOString();
-  const [alertas, intentos] = await Promise.all([
+  const [alertas, intentos, tickers] = await Promise.all([
     consulta,
     supabase
       .from("intentos_rechazados")
@@ -34,9 +35,10 @@ export default async function AlertasPage({ searchParams }: PageProps<"/alertas"
       .gte("recibido_en", hace24h)
       .order("id", { ascending: false })
       .limit(50),
+    supabase.from("tickers").select("ticker_usa").order("ticker_usa"),
   ]);
 
-  const error = alertas.error ?? intentos.error;
+  const error = alertas.error ?? intentos.error ?? tickers.error;
   if (error) {
     console.error("[alertas] carga", error);
     return <p role="alert">❌ No se pudieron cargar las alertas: {traducirErrorDb(error)}</p>;
@@ -57,6 +59,8 @@ export default async function AlertasPage({ searchParams }: PageProps<"/alertas"
       <p className="rounded border border-sky-600/40 bg-sky-600/10 px-3 py-2 text-sm">
         F2: las alertas solo se registran; todavía no se generan señales.
       </p>
+
+      <SimularAlerta tickers={(tickers.data ?? []).map((t) => t.ticker_usa as string)} />
 
       <Filtros filtros={filtros} />
 
