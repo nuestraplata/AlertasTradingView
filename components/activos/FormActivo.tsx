@@ -2,11 +2,11 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useActionState, useState } from "react";
+import { useActionState } from "react";
 import { guardarActivo, type EstadoActivo } from "@/app/(panel)/[estrategia]/actions";
 import { useAviso } from "@/components/Avisos";
 import type { ValoresFormulario } from "@/lib/activos/fila";
-import { NOMINALES_MAX_FACTOR, type Estrategia, type Modo } from "@/lib/activos/schema";
+import type { Estrategia } from "@/lib/activos/schema";
 import { BotonBorrarActivo } from "./BotonBorrarActivo";
 
 type Props = {
@@ -21,10 +21,14 @@ const input = "w-full rounded border border-current/30 bg-transparent px-2 py-1.
 const boton = "rounded border border-current/30 px-3 py-1.5 text-sm hover:bg-current/10";
 
 const TEXTO_TILDE: Record<Estrategia, { etiqueta: string; ayuda: string }> = {
-  corto: { etiqueta: "Activo", ayuda: "Habilita las compras por alerta." },
+  corto: {
+    etiqueta: "Activo",
+    ayuda:
+      "Las alertas de compra pasan a EasyTrading. Se destilda solo cuando EasyTrading avisa que cerró la posición.",
+  },
   intradia: {
     etiqueta: "Operar hoy",
-    ayuda: "Habilita las compras solo por hoy: se destilda solo a las 00:00.",
+    ayuda: "Las alertas de compra pasan a EasyTrading solo hoy: se destilda solo a las 00:00.",
   },
 };
 
@@ -46,28 +50,12 @@ export function FormActivo({ estrategia, tickers, editar }: Props) {
   // Si falla, React resetea el form: se vuelven a poner los valores enviados.
   const v = error?.valores ?? editar?.valores;
   const campos = error?.campos ?? {};
-
-  const [modo, setModo] = useState<Modo>((editar?.valores.modo as Modo) ?? "PAPER");
-  const [nominales, setNominales] = useState(v?.nominales ?? "");
-  const topeSugerido = /^\d+$/.test(nominales) ? String(Number(nominales) * NOMINALES_MAX_FACTOR) : "";
-
   const tildadoInicial = error ? error.valores?.tildado === "on" : (editar?.tildado ?? false);
   const tickerElegido = editar?.valores.ticker_usa ?? "";
 
-  function confirmarReal(e: React.FormEvent<HTMLFormElement>) {
-    const pasaAReal = modo === "REAL" && editar?.valores.modo !== "REAL";
-    if (!pasaAReal) return;
-    const ticker = String(new FormData(e.currentTarget).get("ticker_usa") ?? "");
-    const ok = confirm(
-      `¿Seguro que querés pasar ${ticker} a REAL?\n\n` +
-        "Va a operar con dinero real cuando EasyTrading también tenga EJECUCION_REAL=true.",
-    );
-    if (!ok) e.preventDefault();
-  }
-
   return (
-    <div className="flex max-w-3xl flex-col gap-5">
-      <form action={accion} onSubmit={confirmarReal} className="flex flex-col gap-5">
+    <div className="flex max-w-2xl flex-col gap-5">
+      <form action={accion} className="flex flex-col gap-5">
         <input type="hidden" name="estrategia" value={estrategia} />
         {editar && <input type="hidden" name="id" value={editar.id} />}
 
@@ -115,77 +103,6 @@ export function FormActivo({ estrategia, tickers, editar }: Props) {
           <CampoError mensaje={campos.ticker_usa} />
         </label>
 
-        {/* Nominales */}
-        <div className="grid gap-4 sm:grid-cols-2">
-          <label className="flex flex-col gap-1 text-sm">
-            Nominales *
-            <input
-              name="nominales"
-              inputMode="numeric"
-              defaultValue={v?.nominales}
-              onChange={(e) => setNominales(e.target.value.trim())}
-              required
-              aria-invalid={!!campos.nominales}
-              className={input}
-            />
-            <CampoError mensaje={campos.nominales} />
-          </label>
-          <label className="flex flex-col gap-1 text-sm">
-            Tope de nominales
-            <input
-              name="nominales_max"
-              inputMode="numeric"
-              defaultValue={v?.nominales_max}
-              placeholder={topeSugerido && `${topeSugerido} (3 × nominales)`}
-              aria-invalid={!!campos.nominales_max}
-              className={input}
-            />
-            <span className="text-xs opacity-60">Vacío = 3 × nominales. Máximo de la posición abierta.</span>
-            <CampoError mensaje={campos.nominales_max} />
-          </label>
-        </div>
-
-        {/* Niveles USD */}
-        <fieldset className="grid gap-4 sm:grid-cols-3">
-          <legend className="mb-2 text-sm font-medium">Niveles en USD (gráfico de TradingView)</legend>
-          <label className="flex flex-col gap-1 text-sm">
-            Entrada
-            <input
-              name="entrada_usd"
-              inputMode="decimal"
-              defaultValue={v?.entrada_usd}
-              aria-invalid={!!campos.entrada_usd}
-              className={input}
-            />
-            <span className="text-xs opacity-60">Anotación.</span>
-            <CampoError mensaje={campos.entrada_usd} />
-          </label>
-          <label className="flex flex-col gap-1 text-sm">
-            SL
-            <input
-              name="sl_usd"
-              inputMode="decimal"
-              defaultValue={v?.sl_usd}
-              aria-invalid={!!campos.sl_usd}
-              className={input}
-            />
-            <span className="text-xs opacity-60">Obligatorio para tildar.</span>
-            <CampoError mensaje={campos.sl_usd} />
-          </label>
-          <label className="flex flex-col gap-1 text-sm">
-            TP
-            <input
-              name="tp_usd"
-              inputMode="decimal"
-              defaultValue={v?.tp_usd}
-              aria-invalid={!!campos.tp_usd}
-              className={input}
-            />
-            <span className="text-xs opacity-60">Anotación.</span>
-            <CampoError mensaje={campos.tp_usd} />
-          </label>
-        </fieldset>
-
         {/* Tilde */}
         <label className="flex items-start gap-2 text-sm">
           <input
@@ -199,33 +116,6 @@ export function FormActivo({ estrategia, tickers, editar }: Props) {
             <span className="block text-xs opacity-60">{TEXTO_TILDE[estrategia].ayuda}</span>
           </span>
         </label>
-
-        {/* Modo */}
-        <fieldset className="flex flex-col gap-2 text-sm">
-          <legend className="mb-1 font-medium">Modo</legend>
-          <div className="flex gap-4">
-            {(["PAPER", "REAL"] as const).map((m) => (
-              <label key={m} className="flex items-center gap-2">
-                <input
-                  type="radio"
-                  name="modo"
-                  value={m}
-                  checked={modo === m}
-                  onChange={() => setModo(m)}
-                  className="size-4"
-                />
-                {m}
-              </label>
-            ))}
-          </div>
-          {modo === "REAL" && (
-            <p className="rounded bg-orange-600/15 px-3 py-2 text-xs">
-              ⚠ Solo opera en real si además EasyTrading tiene <code>EJECUCION_REAL=true</code>. Si no,
-              sigue en PAPER.
-            </p>
-          )}
-          <CampoError mensaje={campos.modo} />
-        </fieldset>
 
         {/* Anotaciones */}
         <div className="grid gap-4 sm:grid-cols-2">
@@ -242,9 +132,13 @@ export function FormActivo({ estrategia, tickers, editar }: Props) {
         </div>
         <label className="flex flex-col gap-1 text-sm">
           Notas
-          <textarea name="notas" rows={3} maxLength={2000} defaultValue={v?.notas} className={input} />
+          <textarea name="notas" rows={4} maxLength={2000} defaultValue={v?.notas} className={input} />
           <CampoError mensaje={campos.notas} />
         </label>
+
+        <p className="text-xs opacity-60">
+          Nominales, stop, TP y modo PAPER/REAL se configuran en EasyTrading.
+        </p>
 
         {error && (
           <p role="alert" className="text-sm text-red-600">

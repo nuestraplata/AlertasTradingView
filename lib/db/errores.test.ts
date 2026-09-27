@@ -56,9 +56,9 @@ describe("traducirErrorDb", () => {
       traducirErrorDb({
         code: "23514",
         message:
-          'new row for relation "activos" violates check constraint "activos_tilde_requiere_sl"',
+          'new row for relation "activos" violates check constraint "activos_tilde_segun_estrategia"',
       }),
-    ).toMatch(/Cargá el SL/);
+    ).toBe("El tilde no corresponde a esta lista.");
     expect(
       traducirErrorDb({
         code: "23505",

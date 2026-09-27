@@ -21,10 +21,6 @@ const POR_RESTRICCION: Record<string, (valor: string | null) => string> = {
   activos_ticker_usa_fkey: () =>
     "El ticker se usa en alguna lista (corto o intradía), o no existe en Tickers.",
   activos_ticker_estrategia_unico: () => "Ese ticker ya está en esta lista.",
-  activos_nominales_max_valido: () => "El tope no puede ser menor que los nominales.",
-  activos_sl_menor_entrada: () => "El SL tiene que ser menor que la entrada.",
-  activos_tilde_requiere_sl: () =>
-    "Cargá el SL para poder tildar (sin SL no hay protección local).",
   activos_tilde_segun_estrategia: () => "El tilde no corresponde a esta lista.",
 };
 

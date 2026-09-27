@@ -6,15 +6,9 @@ const NOCHE_AR = new Date("2026-09-27T01:30:00Z"); // 26/09 22:30 en Argentina
 
 const formulario = {
   ticker_usa: "AAPL",
-  nominales: "5",
-  nominales_max: "",
-  entrada_usd: "185,5",
-  tp_usd: "",
-  sl_usd: "180",
-  onda: "",
+  onda: "3",
   sub_onda: "",
   notas: "",
-  modo: "PAPER",
   tildado: "on",
 };
 
@@ -24,15 +18,9 @@ describe("filaParaGuardar", () => {
     expect(filaParaGuardar(datos, NOCHE_AR)).toEqual({
       ticker_usa: "AAPL",
       estrategia: "corto",
-      nominales: 5,
-      nominales_max: 15,
-      entrada_usd: 185.5,
-      tp_usd: null,
-      sl_usd: 180,
-      onda: null,
+      onda: "3",
       sub_onda: null,
       notas: null,
-      modo: "PAPER",
       activo: true,
       operar_hoy_fecha: null,
     });
@@ -61,30 +49,18 @@ describe("valoresFormulario", () => {
       id: 1,
       ticker_usa: "AAPL",
       estrategia: "corto",
-      nominales: 5,
-      nominales_max: 15,
-      entrada_usd: 185.5,
-      tp_usd: null,
-      sl_usd: 180,
       onda: "3",
       sub_onda: null,
       notas: null,
-      modo: "REAL",
       activo: true,
       operar_hoy_fecha: null,
       tickers: { ticker_byma: "AAPL" },
     };
     expect(valoresFormulario(fila)).toEqual({
       ticker_usa: "AAPL",
-      nominales: "5",
-      nominales_max: "15",
-      entrada_usd: "185.5",
-      tp_usd: "",
-      sl_usd: "180",
       onda: "3",
       sub_onda: "",
       notas: "",
-      modo: "REAL",
     });
   });
 });

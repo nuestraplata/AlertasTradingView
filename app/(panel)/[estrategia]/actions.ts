@@ -13,19 +13,7 @@ export type EstadoActivo =
   | { ok: false; error: string; campos?: Record<string, string>; valores?: Record<string, string> }
   | undefined;
 
-const CAMPOS = [
-  "ticker_usa",
-  "nominales",
-  "nominales_max",
-  "entrada_usd",
-  "tp_usd",
-  "sl_usd",
-  "onda",
-  "sub_onda",
-  "notas",
-  "modo",
-  "tildado",
-] as const;
+const CAMPOS = ["ticker_usa", "onda", "sub_onda", "notas", "tildado"] as const;
 
 const estrategiaSchema = z.enum(ESTRATEGIAS);
 const idSchema = z.coerce.number().int().positive();

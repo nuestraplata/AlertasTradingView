@@ -34,7 +34,13 @@ export function BotonBorrarActivo({ id, ticker, estrategia, volverA, className, 
     <form
       action={borrar}
       onSubmit={(e) => {
-        if (!confirm(`¿Borrar ${ticker} de ${NOMBRE_ESTRATEGIA[estrategia]}?`)) e.preventDefault();
+        // La web no sabe de posiciones: recordar qué implica borrar (spec §5).
+        const ok = confirm(
+          `Borrar ${ticker} de ${NOMBRE_ESTRATEGIA[estrategia]}.\n\n` +
+            "Si EasyTrading tiene una posición abierta de este activo, sus alertas " +
+            "de venta dejarán de llegar. ¿Borrar igual?",
+        );
+        if (!ok) e.preventDefault();
       }}
     >
       <input type="hidden" name="id" value={id} />

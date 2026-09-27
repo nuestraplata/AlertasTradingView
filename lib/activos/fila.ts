@@ -1,4 +1,4 @@
-import type { Activo, Estrategia, Modo } from "./schema";
+import type { Activo, Estrategia } from "./schema";
 import { columnasTilde } from "./tilde";
 
 /** Una fila de la tabla activos, con el CEDEAR del mapeo embebido. */
@@ -6,15 +6,9 @@ export type ActivoFila = {
   id: number;
   ticker_usa: string;
   estrategia: Estrategia;
-  nominales: number;
-  nominales_max: number;
-  entrada_usd: number | null;
-  tp_usd: number | null;
-  sl_usd: number | null;
   onda: string | null;
   sub_onda: string | null;
   notas: string | null;
-  modo: Modo;
   activo: boolean;
   operar_hoy_fecha: string | null;
   tickers: { ticker_byma: string } | null;
@@ -22,7 +16,7 @@ export type ActivoFila = {
 
 /** Columnas que se piden a Supabase para armar un ActivoFila. */
 export const COLUMNAS_ACTIVO =
-  "id, ticker_usa, estrategia, nominales, nominales_max, entrada_usd, tp_usd, sl_usd, onda, sub_onda, notas, modo, activo, operar_hoy_fecha, tickers(ticker_byma)";
+  "id, ticker_usa, estrategia, onda, sub_onda, notas, activo, operar_hoy_fecha, tickers(ticker_byma)";
 
 /** Datos validados del formulario → columnas a guardar en la base. */
 export function filaParaGuardar(
@@ -39,25 +33,21 @@ const formatoPrecio = new Intl.NumberFormat("en-US", {
   useGrouping: false,
 });
 
-/** 185.5 → "185.50"; null → "—". Punto decimal, como en TradingView. */
+/**
+ * 185.5 → "185.50"; null → "—". Punto decimal, como en TradingView.
+ * Para mostrar el precio USD de las alertas (F2).
+ */
 export function formatearPrecio(v: number | null): string {
   return v === null ? "—" : formatoPrecio.format(v);
 }
 
 /** Valores iniciales (texto) del formulario de edición. */
 export function valoresFormulario(fila: ActivoFila) {
-  const txt = (v: number | string | null) => (v === null ? "" : String(v));
   return {
     ticker_usa: fila.ticker_usa,
-    nominales: txt(fila.nominales),
-    nominales_max: txt(fila.nominales_max),
-    entrada_usd: txt(fila.entrada_usd),
-    tp_usd: txt(fila.tp_usd),
-    sl_usd: txt(fila.sl_usd),
-    onda: txt(fila.onda),
-    sub_onda: txt(fila.sub_onda),
-    notas: txt(fila.notas),
-    modo: fila.modo,
+    onda: fila.onda ?? "",
+    sub_onda: fila.sub_onda ?? "",
+    notas: fila.notas ?? "",
   };
 }
 export type ValoresFormulario = ReturnType<typeof valoresFormulario>;
