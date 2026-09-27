@@ -177,6 +177,10 @@ WEB:
   Incluye un cron diario de Vercel que hace una consulta mínima a Supabase
   para evitar que el plan Free pause el proyecto por inactividad.
 - F3: motor de reglas + órdenes pendientes + vencimiento + API EasyTrading.
+  - Botón "Pausar todo": interruptor general, visible en todas las
+    pantallas, que bloquea al instante la generación de órdenes (las
+    alertas se siguen guardando, descartadas con motivo "pausado").
+  - No se puede borrar un activo con posición abierta.
 
 EASYTRADING (en su propio repo):
 

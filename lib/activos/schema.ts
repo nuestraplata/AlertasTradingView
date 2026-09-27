@@ -10,6 +10,11 @@ export const MODOS = ["PAPER", "REAL"] as const;
 export type Estrategia = (typeof ESTRATEGIAS)[number];
 export type Modo = (typeof MODOS)[number];
 
+export const NOMBRE_ESTRATEGIA: Record<Estrategia, string> = {
+  corto: "Corto plazo",
+  intradia: "Intradía",
+};
+
 export const NOMINALES_MAX_FACTOR = 3;
 const NOMINALES_TOPE = 1_000_000;
 const PRECIO_TOPE = 1_000_000_000;
