@@ -44,7 +44,7 @@ Cripto (BingX/Binance) queda para una fase posterior, separada.
 {
   "clave": "CLAVE_SECRETA",
   "estrategia": "corto" | "intradia",
-  "accion": "compra" | "venta" | "sl" | "tp",
+  "accion": "compra" | "venta",
   "ticker": "{{ticker}}",
   "precio": "{{close}}",
   "hora": "{{timenow}}"
@@ -55,7 +55,11 @@ Cripto (BingX/Binance) queda para una fase posterior, separada.
   (hora e IP), sin guardar el payload.
 - Todas las alertas válidas se guardan, incluso las descartadas, con motivo.
 - Clave correcta pero datos inválidos (estrategia, accion, ticker o precio
-  mal formados) → se guarda como descartada, con motivo.
+  mal formados) → se guarda como descartada, con motivo. Cualquier accion
+  que no sea "compra" o "venta" (por ejemplo los viejos "sl" / "tp") se
+  descarta con motivo: el stop y el TP los maneja EasyTrading (sección 7).
+- "precio" ({{close}}) es el precio en USD del gráfico de TradingView. En
+  las alertas de compra se usa para calcular ppc_usd (sección 7).
 - El webhook acepta el cuerpo como application/json o text/plain
   (TradingView manda text/plain si el mensaje no es JSON válido).
   "precio" llega como texto y se convierte a número.
@@ -77,10 +81,15 @@ Campos por activo:
 - nominales (fijos, editables en cualquier momento)
 - nominales_max: tope de la posición abierta. Por defecto 3 × nominales,
   editable.
-- sl_usd (cargado sobre el gráfico USA). OBLIGATORIO para poder tildar
-  "activo" u "operar hoy" (sin SL no hay protección local).
-- entrada_usd, tp_usd (cargados sobre el gráfico USA): solo anotación,
-  opcionales. Si hay entrada_usd cargada, se valida sl_usd < entrada_usd.
+- stop_pct: stop automático, % debajo del PPC (sección 7). Por defecto 2,
+  editable por activo (entre 0,1 y 20). Aplica a corto e intradía.
+- tp_usd (cargado sobre el gráfico USA): take profit. SOLO corto plazo;
+  opcional (no hace falta para tildar). En intradía no existe: las salidas
+  las marca la alerta de venta o el stop.
+- entrada_usd (cargado sobre el gráfico USA): solo anotación, opcional.
+  Si hay entrada_usd y tp_usd cargados, se valida tp_usd > entrada_usd.
+- Tildar "activo" u "operar hoy" no requiere ningún otro campo: el stop
+  automático protege siempre.
 - onda, sub_onda, notas (solo anotación, no afectan ninguna regla)
 - modo: PAPER | REAL (por defecto PAPER)
 - Corto plazo: tilde "activo".
@@ -103,8 +112,8 @@ Generales:
 - Toda orden vence a los 60 s si EasyTrading no la tomó → "vencida",
   no se ejecuta nunca después.
 - Nunca vender más nominales de los que hay abiertos en esa estrategia.
-  Si la posición ya está cerrada (por ejemplo, el SL local ganó de mano a la
-  alerta), la venta se descarta.
+  Si la posición ya está cerrada (por ejemplo, el stop o el TP local ganó de
+  mano a la alerta), la venta se descarta.
 - Compra con posición abierta → se suma (se promedia).
 - Compra que haría superar nominales_max → se descarta con motivo.
 - Resultado parcial:
@@ -114,8 +123,14 @@ Generales:
 
 Corto plazo:
 
-- Compra: solo si el activo está tildado "activo".
-- Venta / TP / SL: vende TODA la posición de corto plazo de ese activo.
+- Compra: solo si el activo está tildado "activo". Compra los nominales
+  cargados.
+- Salidas (lo primero que ocurra), cada una vende TODA la posición de corto
+  plazo de ese activo:
+  - Alerta de venta de TradingView.
+  - Stop automático stop_pct debajo del PPC (sección 7).
+  - TP cargado en la web, si hay (sección 7).
+- Qué es "toda la posición":
   - Etapa inicial: la posición abierta por la app.
   - Futuro, cuando EasyTrading tenga la "Tenencia real del broker
     (F4 de EasyTrading)":
@@ -123,23 +138,47 @@ Corto plazo:
 
 Intradía:
 
-- Compra: solo si está tildado "operar hoy".
-- Venta / TP / SL: vende solo la posición intradía, esté o no tildado hoy.
-  El tilde solo habilita compras.
-- Si al cierre queda posición abierta, se mantiene hasta la alerta de venta
-  o el cierre manual.
+- Entradas y salidas las marca la alerta de TradingView.
+- Compra: solo si está tildado "operar hoy". Compra los nominales cargados.
+- Salidas (lo primero que ocurra):
+  - Alerta de venta: vende TODA la posición intradía abierta de ese activo
+    (la comprada hoy y la que haya quedado de días anteriores), esté o no
+    tildado hoy. El tilde solo habilita compras.
+  - Stop automático stop_pct debajo del PPC (sección 7).
+- Intradía no tiene TP.
+- Si al cierre queda posición abierta, se mantiene hasta la alerta de venta,
+  el stop o el cierre manual.
 
-## 7. Stop loss local (lo vigila EasyTrading)
+## 7. Stop y TP automáticos (los vigila EasyTrading)
 
-Protección ante caída de conexión o alerta perdida.
+Protección ante caída de conexión o alerta perdida. Los calcula y vigila
+EasyTrading en la PC local, con los precios del CEDEAR en ARS.
 
-- Los niveles USD se traducen a ARS por PORCENTAJE:
-  sl_ars = ppc_ars × (sl_usd / ppc_usd)
-  - ppc_usd = promedio ponderado del "precio" de las alertas de compra.
-  - ppc_ars = precio promedio real del CEDEAR comprado.
-- Si Fran edita sl_usd en la web, se recalcula en las posiciones abiertas.
-- EasyTrading vende la posición si el bid ≤ sl_ars.
-- El TP lo dispara solo la alerta de TradingView (no hay TP local por ahora).
+- ppc_ars = precio promedio real (ponderado) del CEDEAR comprado.
+- ppc_usd = promedio ponderado del "precio" ({{close}}, USD) de las alertas
+  de compra que formaron la posición.
+- Stop (corto e intradía): al confirmarse cada compra, EasyTrading fija
+  stop_ars = ppc_ars × (1 − stop_pct / 100)
+  y vende toda la posición si el bid ≤ stop_ars.
+- TP (solo corto, si hay tp_usd): se traduce a ARS por PROPORCIÓN:
+  tp_ars = ppc_ars × (tp_usd / ppc_usd)
+  y se vende toda la posición si el bid ≥ tp_ars.
+- Cada compra que promedia recalcula ppc_ars, ppc_usd, stop_ars y tp_ars.
+- Si Fran edita stop_pct o tp_usd en la web con la posición abierta, se
+  recalculan stop_ars / tp_ars de esa posición.
+
+Decisiones abiertas (a resolver en EasyTrading):
+
+- Stop en el broker: evaluar en F5 cargar una orden stop en Cocos/Primary
+  (protege aunque la PC esté apagada), si el broker la acepta para CEDEARs.
+  Por ahora el stop lo vigila EasyTrading y solo protege con la PC
+  prendida y conectada.
+- Stop vs spread: comprar al ask y medir el stop con el bid puede
+  dispararlo enseguida en CEDEARs con spread ancho. Evaluar medir con el
+  último operado, o exigir que la condición se mantenga X segundos.
+- Reentrada: tras salir por stop o TP el activo sigue tildado, y una nueva
+  alerta de compra vuelve a entrar. Evaluar si conviene (por ejemplo,
+  destildar al salir por stop, o un tiempo de espera).
 
 ## 8. Ejecución en EasyTrading
 
@@ -163,7 +202,7 @@ Protección ante caída de conexión o alerta perdida.
 tickers (ticker_usa → ticker_byma), activos, alertas (payload crudo + tipo
 + estado + motivo), intentos_rechazados (hora, IP; sin payload), ordenes
 (alerta_id único, estado, vence_en, resultado), posiciones (por activo y
-estrategia: nominales, ppc_ars, ppc_usd, sl_ars, fecha apertura),
+estrategia: nominales, ppc_ars, ppc_usd, stop_ars, tp_ars, fecha apertura),
 configuracion (horario, vencimiento), feriados (fecha, descripción).
 Cripto: tablas propias en su fase.
 
@@ -177,6 +216,8 @@ WEB:
   Incluye un cron diario de Vercel que hace una consulta mínima a Supabase
   para evitar que el plan Free pause el proyecto por inactividad.
 - F3: motor de reglas + órdenes pendientes + vencimiento + API EasyTrading.
+  - La orden de compra que toma EasyTrading incluye stop_pct, tp_usd (si
+    hay) y el precio USD de la alerta (para ppc_usd).
   - Botón "Pausar todo": interruptor general, visible en todas las
     pantallas, que bloquea al instante la generación de órdenes (las
     alertas se siguen guardando, descartadas con motivo "pausado").
@@ -185,7 +226,8 @@ WEB:
 EASYTRADING (en su propio repo):
 
 - F4: módulo puente (pull, tomar, reportar) solo en PAPER.
-- F5: posiciones + SL local, en PAPER.
+- F5: posiciones + stop automático + TP local, en PAPER. Evaluar la orden
+  stop en el broker (sección 7, decisiones abiertas).
 - F6: REAL con doble candado, 1 nominal primero, después montos chicos.
 
 LUEGO:
