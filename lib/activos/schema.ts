@@ -69,3 +69,11 @@ export const activoSchema = z.object({
 
 export type ActivoInput = z.input<typeof activoSchema>;
 export type Activo = z.output<typeof activoSchema>;
+
+/** Tilde rápido desde la tabla: qué activo y cómo tiene que quedar. */
+export const cambioTildeSchema = z.object({
+  id: z.number().int().positive(),
+  estrategia: z.enum(ESTRATEGIAS),
+  tildado: z.boolean(),
+});
+export type CambioTilde = z.infer<typeof cambioTildeSchema>;

@@ -3,7 +3,15 @@
 import { revalidatePath } from "next/cache";
 import * as z from "zod";
 import { filaParaGuardar } from "@/lib/activos/fila";
-import { ESTRATEGIAS, NOMBRE_ESTRATEGIA, activoSchema, type Estrategia } from "@/lib/activos/schema";
+import {
+  ESTRATEGIAS,
+  NOMBRE_ESTRATEGIA,
+  activoSchema,
+  cambioTildeSchema,
+  type CambioTilde,
+  type Estrategia,
+} from "@/lib/activos/schema";
+import { columnasTilde } from "@/lib/activos/tilde";
 import { clienteConSesion } from "@/lib/auth/sesion";
 import { restriccionDe, traducirErrorDb, type ErrorDb } from "@/lib/db/errores";
 import { erroresPorCampo } from "@/lib/validacion";
@@ -91,6 +99,34 @@ export async function borrarActivo(_prev: EstadoActivo, formData: FormData): Pro
     ok: true,
     mensaje: `${data[0].ticker_usa} borrado de ${NOMBRE_ESTRATEGIA[estrategia.data]}.`,
   };
+}
+
+/**
+ * Tilde rápido desde la tabla. Se llama directo desde el checkbox (no es
+ * un form), así que los datos llegan como argumento y se validan igual.
+ */
+export async function cambiarTilde(
+  cambio: CambioTilde,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const { supabase } = await clienteConSesion();
+
+  const c = cambioTildeSchema.safeParse(cambio);
+  if (!c.success) return { ok: false, error: "Datos inválidos." };
+
+  const { data, error } = await supabase
+    .from("activos")
+    .update(columnasTilde(c.data.estrategia, c.data.tildado))
+    .eq("id", c.data.id)
+    .eq("estrategia", c.data.estrategia)
+    .select("id");
+  if (error) {
+    console.error("[activos] tilde", error.code, error.message);
+    return { ok: false, error: traducirErrorDb(error) };
+  }
+  if (!data.length) return { ok: false, error: "Ese activo ya no existe (¿se borró en otra pestaña?)." };
+
+  revalidatePath(`/${c.data.estrategia}`);
+  return { ok: true };
 }
 
 function mensajeError(error: ErrorDb, ticker: string, estrategia: Estrategia): string {

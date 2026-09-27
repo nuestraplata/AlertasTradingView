@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { erroresPorCampo } from "@/lib/validacion";
-import { activoSchema, tickerSchema } from "./schema";
+import { activoSchema, cambioTildeSchema, tickerSchema } from "./schema";
 
 /** Simula lo que manda un formulario: todo texto, checkbox ausente = sin tildar. */
 const base = {
@@ -97,5 +97,25 @@ describe("activoSchema", () => {
   it("reporta varios campos a la vez", () => {
     const e = errores({ ...base, ticker_usa: "", estrategia: "x", onda: "x".repeat(51) });
     expect(Object.keys(e).sort()).toEqual(["estrategia", "onda", "ticker_usa"]);
+  });
+});
+
+describe("cambioTildeSchema", () => {
+  it("acepta id entero positivo, estrategia válida y booleano", () => {
+    expect(cambioTildeSchema.parse({ id: 7, estrategia: "intradia", tildado: true })).toEqual({
+      id: 7,
+      estrategia: "intradia",
+      tildado: true,
+    });
+  });
+
+  it.each([
+    { id: 0, estrategia: "corto", tildado: true },
+    { id: 1.5, estrategia: "corto", tildado: true },
+    { id: "7", estrategia: "corto", tildado: true },
+    { id: 7, estrategia: "swing", tildado: true },
+    { id: 7, estrategia: "corto", tildado: "on" },
+  ])("rechaza datos manipulados: %j", (datos) => {
+    expect(cambioTildeSchema.safeParse(datos).success).toBe(false);
   });
 });

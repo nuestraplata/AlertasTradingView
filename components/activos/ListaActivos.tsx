@@ -3,18 +3,21 @@ import type { ActivoFila } from "@/lib/activos/fila";
 import type { Estrategia } from "@/lib/activos/schema";
 import { estaTildado } from "@/lib/activos/tilde";
 import { BotonBorrarActivo } from "./BotonBorrarActivo";
+import { TildeRapido } from "./TildeRapido";
 
 const NOMBRE_TILDE: Record<Estrategia, string> = { corto: "Activo", intradia: "Hoy" };
 const boton = "rounded border border-current/30 px-2 py-1 text-sm hover:bg-current/10";
 
-/** Tilde en modo lectura (en 7c pasa a ser un checkbox que guarda al instante). */
-function Tilde({ fila }: { fila: ActivoFila }) {
-  return estaTildado(fila) ? (
-    <span aria-label="Tildado">✅</span>
-  ) : (
-    <span aria-label="Sin tildar" className="opacity-40">
-      ☐
-    </span>
+/** Checkbox que guarda al instante. Intradía: tildado solo si la fecha es hoy. */
+function Tilde({ fila, conTexto }: { fila: ActivoFila; conTexto?: boolean }) {
+  return (
+    <TildeRapido
+      id={fila.id}
+      ticker={fila.ticker_usa}
+      estrategia={fila.estrategia}
+      tildado={estaTildado(fila)}
+      conTexto={conTexto}
+    />
   );
 }
 
@@ -87,9 +90,9 @@ export function ListaActivos({ filas, estrategia }: { filas: ActivoFila[]; estra
       <ul className="flex flex-col gap-3 md:hidden">
         {filas.map((f) => (
           <li key={f.id} className="flex flex-col gap-2 rounded border border-current/15 p-3 text-sm">
-            <div className="flex items-center gap-2">
-              <Tilde fila={f} />
+            <div className="flex items-center justify-between gap-2">
               <Ticker fila={f} />
+              <Tilde fila={f} conTexto />
             </div>
             {(f.onda || f.sub_onda) && <div className="text-xs">Onda {onda(f)}</div>}
             {f.notas && <div className="line-clamp-2 text-xs opacity-70">📝 {f.notas}</div>}
