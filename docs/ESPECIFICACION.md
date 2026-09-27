@@ -62,6 +62,11 @@ eso es responsabilidad de EasyTrading (sección 7).
 
 - Clave inválida → rechazar, no genera nada. Se registra solo el intento
   (hora e IP), sin guardar el payload.
+- En producción, además de la clave, solo se aceptan pedidos desde las IPs
+  oficiales de TradingView (lista en lib/alertas/ip.ts, verificada contra
+  su documentación). Otra IP → intento rechazado "ip_no_permitida". En
+  local y en los previews no se filtra por IP.
+- El ticker se guarda sin prefijo de mercado ("NASDAQ:AAPL" → "AAPL").
 - Todas las alertas con clave válida se guardan (hora, ticker, precio USD,
   acción, estado, motivo), incluso las descartadas.
 - Clave correcta pero datos inválidos (estrategia, accion, ticker o precio

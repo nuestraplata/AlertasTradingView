@@ -113,6 +113,26 @@ NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
   **escribí la URL a mano**.
 - `.env.local` **nunca se commitea** (está en `.gitignore`).
 
+#### Variables de F2 (webhook)
+
+```
+SUPABASE_SECRET_KEY=sb_secret_...
+WEBHOOK_CLAVE=<64 caracteres aleatorios>
+```
+
+- `SUPABASE_SECRET_KEY`: Supabase → **Project Settings → API Keys** →
+  secret key. Da acceso total a la base: **solo servidor**, nunca con
+  prefijo `NEXT_PUBLIC_`, nunca en el navegador ni en un mensaje.
+- `WEBHOOK_CLAVE`: la clave que va en el campo `"clave"` del mensaje de
+  TradingView. Generala en PowerShell (sirve también para otros secretos):
+
+  ```powershell
+  $b = New-Object byte[] 32; [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); -join ($b | ForEach-Object { $_.ToString("x2") })
+  ```
+
+  Mínimo 24 caracteres: si es más corta, el webhook responde 500 y lo
+  registra en la consola del servidor.
+
 ### 6. Levantar la app
 
 ```powershell

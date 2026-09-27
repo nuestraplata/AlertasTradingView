@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validarSupabaseEnv } from "./env";
+import { validarSecreto, validarSecretKey, validarSupabaseEnv } from "./env";
 
 const URL_OK = "https://abcdefgh.supabase.co";
 const KEY_OK = "sb_publishable_abc123";
@@ -68,5 +68,31 @@ describe("validarSupabaseEnv", () => {
     expect(() => validarSupabaseEnv(URL_OK, "eyJhbGciOiJIUzI1NiJ9.x.y")).toThrow(
       /sb_publishable_/,
     );
+  });
+});
+
+describe("validarSecretKey", () => {
+  it("acepta sb_secret_", () => {
+    expect(validarSecretKey("sb_secret_abc")).toBe("sb_secret_abc");
+  });
+
+  it("falla si falta, si es la publishable o si tiene caracteres raros", () => {
+    expect(() => validarSecretKey(undefined)).toThrow(/Falta SUPABASE_SECRET_KEY/);
+    expect(() => validarSecretKey("sb_publishable_abc")).toThrow(/sb_secret_/);
+    expect(() => validarSecretKey("sb_secret_abc\r")).toThrow(/U\+000D/);
+  });
+});
+
+describe("validarSecreto", () => {
+  const OK = "a".repeat(24);
+
+  it("acepta 24 caracteres o más", () => {
+    expect(validarSecreto("WEBHOOK_CLAVE", OK)).toBe(OK);
+  });
+
+  it("falla si falta, si es corta o si tiene caracteres invisibles", () => {
+    expect(() => validarSecreto("WEBHOOK_CLAVE", undefined)).toThrow(/Falta WEBHOOK_CLAVE/);
+    expect(() => validarSecreto("WEBHOOK_CLAVE", "corta")).toThrow(/mínimo 24/);
+    expect(() => validarSecreto("CRON_SECRET", `${OK} `)).toThrow(/CRON_SECRET tiene un carácter inválido \(U\+0020\)/);
   });
 });
