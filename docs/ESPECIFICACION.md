@@ -2,18 +2,24 @@
 
 ## 1. Qué es
 
-Web en la nube que recibe alertas de TradingView (webhook), las guarda
-clasificadas por tipo y, según la configuración de cada activo, genera
-órdenes que EasyTrading (PC local) busca y ejecuta en Cocos Capital.
+Web en la nube que recibe TODAS las alertas de TradingView (webhook), las
+registra y, si el activo está tildado en su estrategia y el envío está
+activado, las pasa como SEÑAL a EasyTrading (PC local). EasyTrading decide
+con su propia configuración si opera y cómo, ejecuta en Cocos Capital y
+devuelve el resultado, que la web muestra junto a la alerta.
 La PC nunca se expone a internet: EasyTrading CONSULTA a la web (pull).
 Cripto (BingX/Binance) queda para una fase posterior, separada.
+
+La web NO arma órdenes, NO guarda posiciones y NO calcula resultados:
+eso es responsabilidad de EasyTrading (sección 7).
 
 ## 2. Stack
 
 - Next.js + Supabase (Postgres) + Vercel, planes gratuitos.
 - Repo nuevo y PRIVADO, separado de EasyTrading.
 - Región: Supabase y funciones de Vercel en São Paulo (gru1) por latencia.
-- Login single-user obligatorio para toda la web (excepto el webhook).
+- Login single-user obligatorio para toda la web (excepto el webhook y la
+  API de EasyTrading, que tienen su propia autenticación).
   Supabase Auth con email + contraseña, sin registro público (el usuario
   se crea a mano en Supabase).
 - Secretos en variables de entorno, nunca en el código.
@@ -28,14 +34,17 @@ Cripto (BingX/Binance) queda para una fase posterior, separada.
 
 1. Webhook (POST): recibe la alerta de TradingView, valida la clave,
    la guarda y responde rápido (TradingView corta a los ~3 s).
-2. Motor de reglas (en la web): cruza la alerta con la configuración
-   y crea (o no) una orden pendiente, registrando el motivo.
+2. Filtro de señales (en la web): decide si la alerta pasa a EasyTrading
+   como señal pendiente o se descarta, siempre registrando el motivo.
 3. API para EasyTrading (protegida con token propio):
-   - GET órdenes pendientes
-   - POST "tomar" orden (atómico: pendiente → tomada; si ya fue tomada, falla)
-   - POST resultado (ejecutada / parcial / rechazada + precio y nominales)
-   - POST estado de posiciones (para mostrarlas en la web)
-4. Panel web: configuración de listas, alertas por tipo, órdenes, posiciones.
+   - GET señales pendientes
+   - POST "tomar" señal (atómico: pendiente → tomada; si ya fue tomada, falla)
+   - POST resultado de la señal: ejecutada (precio y nominales) o
+     descartada por EasyTrading (con motivo)
+   - POST aviso de posición de CORTO cerrada (sección 8)
+4. Panel web: listas corto/intradía (tildes y anotaciones), tickers,
+   alertas con su estado y el resultado de EasyTrading, interruptor
+   "Envío a EasyTrading".
 5. Módulo puente en EasyTrading (se hace en el repo de EasyTrading, aparte).
 
 ## 4. Formato de alerta (campo "Mensaje" de TradingView)
@@ -53,189 +62,171 @@ Cripto (BingX/Binance) queda para una fase posterior, separada.
 
 - Clave inválida → rechazar, no genera nada. Se registra solo el intento
   (hora e IP), sin guardar el payload.
-- Todas las alertas válidas se guardan, incluso las descartadas, con motivo.
+- Todas las alertas con clave válida se guardan (hora, ticker, precio USD,
+  acción, estado, motivo), incluso las descartadas.
 - Clave correcta pero datos inválidos (estrategia, accion, ticker o precio
   mal formados) → se guarda como descartada, con motivo. Cualquier accion
   que no sea "compra" o "venta" (por ejemplo los viejos "sl" / "tp") se
-  descarta con motivo: el stop y el TP los maneja EasyTrading (sección 7).
-- "precio" ({{close}}) es el precio en USD del gráfico de TradingView. En
-  las alertas de compra se usa para calcular ppc_usd (sección 7).
+  descarta con motivo.
+- "precio" ({{close}}) es el precio en USD del gráfico de TradingView. Es
+  solo registro: se guarda y se pasa en la señal, pero la web no calcula
+  nada con él.
 - El webhook acepta el cuerpo como application/json o text/plain
   (TradingView manda text/plain si el mensaje no es JSON válido).
   "precio" llega como texto y se convierte a número.
 
-## 5. Configuración de activos (acciones)
+## 5. Configuración de activos en la web
 
 Dos listas separadas: CORTO PLAZO e INTRADÍA.
-Un mismo ticker PUEDE estar en ambas; son posiciones independientes.
+Un mismo ticker PUEDE estar en ambas; son independientes.
 Clave única: (ticker_usa, estrategia).
 
-Campos por activo:
+Por activo, la web guarda SOLO:
 
-- ticker_usa (el de TradingView) y ticker_byma (CEDEAR). Mapeo manual
-  porque pueden no coincidir. El mapeo vive en una tabla aparte "tickers"
-  (ticker_usa → ticker_byma), compartida por las dos listas: se carga una
-  sola vez por ticker.
-- Siempre se opera el CEDEAR en ARS, plazo 24hs (el ticker sin sufijo,
-  compatible con Instrumento.ticker de EasyTrading).
-- nominales (fijos, editables en cualquier momento)
-- nominales_max: tope de la posición abierta. Por defecto 3 × nominales,
-  editable.
-- stop_pct: stop automático, % debajo del PPC (sección 7). Por defecto 2,
-  editable por activo (entre 0,1 y 20). Aplica a corto e intradía.
-- tp_usd (cargado sobre el gráfico USA): take profit. SOLO corto plazo;
-  opcional (no hace falta para tildar). En intradía no existe: las salidas
-  las marca la alerta de venta o el stop.
-- entrada_usd (cargado sobre el gráfico USA): solo anotación, opcional.
-  Si hay entrada_usd y tp_usd cargados, se valida tp_usd > entrada_usd.
-- Tildar "activo" u "operar hoy" no requiere ningún otro campo: el stop
-  automático protege siempre.
-- onda, sub_onda, notas (solo anotación, no afectan ninguna regla)
-- modo: PAPER | REAL (por defecto PAPER)
-- Corto plazo: tilde "activo".
-- Intradía: tilde "operar hoy", que se destilda solo al empezar cada día.
-  Se guarda como operar_hoy_fecha: el tilde cuenta como marcado solo si esa
-  fecha es hoy (hora de Argentina). No hace falta cron.
+- ticker_usa (el de TradingView). El CEDEAR (ticker_byma) sale del mapeo
+  en la tabla aparte "tickers" (ticker_usa → ticker_byma), compartida por
+  las dos listas y cargada a mano porque pueden no coincidir. El CEDEAR va
+  sin sufijo (compatible con Instrumento.ticker de EasyTrading).
+- Tilde:
+  - Corto plazo: "activo".
+  - Intradía: "operar hoy", que se destilda solo al empezar cada día. Se
+    guarda como operar_hoy_fecha: el tilde cuenta como marcado solo si esa
+    fecha es hoy (hora de Argentina). No hace falta cron.
+- onda, sub_onda, notas (solo anotación, no afectan ninguna regla).
 
-## 6. Reglas de negocio
+Nominales, tope, stop, TP, trailing y modo PAPER/REAL NO están en la web:
+los configura EasyTrading (sección 7).
 
-Generales:
+## 6. Reglas de la web (filtro de señales)
 
-- Alertas fuera del horario de mercado (configurable) → se descartan.
-  Se usa la hora de llegada al servidor (hora de Argentina), no la "hora"
-  de la alerta. También se descartan fines de semana y feriados; los
-  feriados están en una tabla que Fran carga a mano.
-- Ticker no configurado para esa estrategia → se descarta.
-- Una alerta genera como máximo UNA orden (idempotencia por alerta).
-- Antiduplicado: una alerta idéntica (mismo ticker + estrategia + accion) a
-  otra recibida en los últimos 30 s → se descarta con motivo.
-- Toda orden vence a los 60 s si EasyTrading no la tomó → "vencida",
-  no se ejecuta nunca después.
-- Nunca vender más nominales de los que hay abiertos en esa estrategia.
-  Si la posición ya está cerrada (por ejemplo, el stop o el TP local ganó de
-  mano a la alerta), la venta se descarta.
-- Compra con posición abierta → se suma (se promedia).
-- Compra que haría superar nominales_max → se descarta con motivo.
-- Resultado parcial:
-  - Compra parcial: se cancela el resto y la posición queda con lo ejecutado.
-  - Venta parcial: EasyTrading reintenta hasta cerrar la posición (se define
-    en sus fases).
+Toda alerta con clave válida se guarda. Pasa a EasyTrading como señal
+SOLO si se cumple todo lo siguiente; si no, queda descartada con el motivo
+del primer punto que falle:
 
-Corto plazo:
+- Datos válidos (sección 4).
+- Dentro del horario de mercado (configurable). Se usa la hora de llegada
+  al servidor (hora de Argentina), no la "hora" de la alerta. Fines de
+  semana y feriados se descartan; los feriados están en una tabla que Fran
+  carga a mano.
+- No es duplicada: una alerta idéntica (mismo ticker + estrategia + accion)
+  a otra recibida en los últimos 30 s → descartada.
+- El ticker está en la lista de esa estrategia.
+- El activo está tildado en esa estrategia (corto: "activo"; intradía:
+  "operar hoy" de hoy).
+- Interruptor "Envío a EasyTrading" ACTIVADO. En pausa → descartada con
+  motivo "pausado".
 
-- Compra: solo si el activo está tildado "activo". Compra los nominales
-  cargados.
-- Salidas (lo primero que ocurra), cada una vende TODA la posición de corto
-  plazo de ese activo:
-  - Alerta de venta de TradingView.
-  - Stop automático stop_pct debajo del PPC (sección 7).
-  - TP cargado en la web, si hay (sección 7).
-- Qué es "toda la posición":
-  - Etapa inicial: la posición abierta por la app.
-  - Futuro, cuando EasyTrading tenga la "Tenencia real del broker
-    (F4 de EasyTrading)":
-    tenencia total del broker MENOS la posición intradía abierta.
+Señales:
 
-Intradía:
+- Una alerta genera como máximo UNA señal (idempotencia por alerta).
+- La señal lleva: alerta_id, ticker BYMA, estrategia, compra/venta, hora y
+  precio USD (solo registro).
+- Toda señal vence a los 60 s si EasyTrading no la tomó → "vencida"; no se
+  ejecuta nunca después.
+- El resultado que devuelve EasyTrading (ejecutada con precio y nominales,
+  o descartada con su motivo) se guarda con la señal y se muestra junto a
+  la alerta. La web no guarda posiciones ni calcula resultados.
 
-- Entradas y salidas las marca la alerta de TradingView.
-- Compra: solo si está tildado "operar hoy". Compra los nominales cargados.
-- Salidas (lo primero que ocurra):
-  - Alerta de venta: vende TODA la posición intradía abierta de ese activo
-    (la comprada hoy y la que haya quedado de días anteriores), esté o no
-    tildado hoy. El tilde solo habilita compras.
-  - Stop automático stop_pct debajo del PPC (sección 7).
-- Intradía no tiene TP.
-- Si al cierre queda posición abierta, se mantiene hasta la alerta de venta,
-  el stop o el cierre manual.
+Destildado automático de CORTO:
 
-## 7. Stop y TP automáticos (los vigila EasyTrading)
+- Cuando EasyTrading avisa que se cerró TODA una posición de corto plazo
+  (por venta, stop, TP o trailing), la web destilda "activo" en corto para
+  ese activo. Intradía no se toca.
 
-Protección ante caída de conexión o alerta perdida. Los calcula y vigila
-EasyTrading en la PC local, con los precios del CEDEAR en ARS.
+## 7. Responsabilidad de EasyTrading (resumen)
 
-- ppc_ars = precio promedio real (ponderado) del CEDEAR comprado.
-- ppc_usd = promedio ponderado del "precio" ({{close}}, USD) de las alertas
-  de compra que formaron la posición.
-- Stop (corto e intradía): al confirmarse cada compra, EasyTrading fija
-  stop_ars = ppc_ars × (1 − stop_pct / 100)
-  y vende toda la posición si el bid ≤ stop_ars.
-- TP (solo corto, si hay tp_usd): se traduce a ARS por PROPORCIÓN:
-  tp_ars = ppc_ars × (tp_usd / ppc_usd)
-  y se vende toda la posición si el bid ≥ tp_ars.
-- Cada compra que promedia recalcula ppc_ars, ppc_usd, stop_ars y tp_ars.
-- Si Fran edita stop_pct o tp_usd en la web con la posición abierta, se
-  recalculan stop_ars / tp_ars de esa posición.
+Se diseña en detalle en el repo de EasyTrading; acá solo lo que la web
+necesita saber.
 
-Decisiones abiertas (a resolver en EasyTrading):
-
-- Stop en el broker: evaluar en F5 cargar una orden stop en Cocos/Primary
-  (protege aunque la PC esté apagada), si el broker la acepta para CEDEARs.
-  Por ahora el stop lo vigila EasyTrading y solo protege con la PC
-  prendida y conectada.
-- Stop vs spread: comprar al ask y medir el stop con el bid puede
-  dispararlo enseguida en CEDEARs con spread ancho. Evaluar medir con el
-  último operado, o exigir que la condición se mantenga X segundos.
-- Reentrada: tras salir por stop o TP el activo sigue tildado, y una nueva
-  alerta de compra vuelve a entrar. Evaluar si conviene (por ejemplo,
-  destildar al salir por stop, o un tiempo de espera).
-
-## 8. Ejecución en EasyTrading
-
-- "A mercado" = Intencion.LIMITE cruzando el spread (compra al ask,
-  vende al bid).
-- El tope de nominales por instrumento de EasyTrading debe ser ≥ a los
-  nominales configurados en la web; si no, la orden se rechaza y se reporta.
-- Doble candado: se opera REAL solo si el activo está en REAL en la web Y
-  EJECUCION_REAL=true en el motor. En cualquier otro caso → PAPER.
-- PAPER: simula el fill al precio real del momento (ask/bid), registra la
-  operación con dinero ficticio y reporta igual que una real.
-- EasyTrading guarda el ID de orden de la web: al reconectar, NUNCA
-  re-ejecuta una orden ya tomada (verifica estado antes de operar).
-- El CEDEAR tiene que estar suscripto en el motor (en_watchlist) para
-  tener precios; respetar SUSCRIPCION_LIMITE.
+- Tiene su propia lista de activos (doble validación): una señal de un
+  activo que no está en su lista, o con la estrategia apagada, se descarta.
+- Arma la orden con su propia configuración, en ARS: nominales, tope de
+  posición, stop, TP, trailing, modo PAPER/REAL (doble candado con
+  EJECUCION_REAL) y la regla de qué vender en cada estrategia.
+- Lleva las posiciones y vigila stop / TP / trailing localmente.
+- Devuelve el resultado de cada señal tomada: ejecutada (precio y
+  nominales) o descartada con motivo ("no está en la lista de
+  EasyTrading", "estrategia apagada", "sin configurar", "sin posición
+  abierta", etc.).
+- Avisa a la web cuando se cierra toda una posición de CORTO (sección 8).
+- Guarda el ID de señal: al reconectar, nunca re-ejecuta una señal ya
+  tomada.
 - El polling va por HTTPS a la web: NO consume getToken ni WebSocket de
   Primary (límites de 1/día intactos).
 
+Decisiones abiertas (a resolver en EasyTrading):
+
+- Stop en el broker: evaluar cargar una orden stop en Cocos/Primary
+  (protege aunque la PC esté apagada), si el broker la acepta para CEDEARs.
+- Stop vs spread: comprar al ask y medir el stop con el bid puede
+  dispararlo enseguida en CEDEARs con spread ancho. Evaluar medir con el
+  último operado, o exigir que la condición se mantenga X segundos.
+- Reentrada en intradía: tras salir por stop el activo sigue tildado
+  "operar hoy", y una nueva alerta de compra vuelve a entrar. (En corto
+  no pasa: al cerrarse la posición la web lo destilda.)
+- Venta de la tenencia real del broker (hoy: solo la posición abierta por
+  la app).
+
+## 8. Aviso de posición de corto cerrada
+
+EasyTrading llama a la API de la web (no escribe directo en Supabase):
+
+- POST /api/easytrading/posicion-cerrada, con el mismo token que el resto
+  de la API. Cuerpo: ticker BYMA, estrategia ("corto"), hora del cierre y,
+  si lo hubo, el ID de la señal que lo cerró.
+- La web busca el activo por ticker BYMA (vía "tickers") en la lista de
+  corto, lo destilda y registra el aviso. Si ya estaba destildado, no hace
+  nada y responde OK (idempotente: EasyTrading puede reintentar).
+- Si el ticker no está en la lista de corto, responde OK y registra el
+  aviso con motivo "no está en la lista".
+
+Por qué por API y no escribiendo en Supabase: EasyTrading usa una sola
+credencial (el token), que se revoca desde la web; no hace falta darle a
+la PC una clave con acceso a la base, y la regla de destildado queda en un
+solo lugar.
+
 ## 9. Tablas (orientativo)
 
-tickers (ticker_usa → ticker_byma), activos, alertas (payload crudo + tipo
-+ estado + motivo), intentos_rechazados (hora, IP; sin payload), ordenes
-(alerta_id único, estado, vence_en, resultado), posiciones (por activo y
-estrategia: nominales, ppc_ars, ppc_usd, stop_ars, tp_ars, fecha apertura),
-configuracion (horario, vencimiento), feriados (fecha, descripción).
+tickers (ticker_usa → ticker_byma), activos (ticker_usa, estrategia,
+activo, operar_hoy_fecha, onda, sub_onda, notas), alertas (payload crudo,
+hora, ticker, precio USD, acción, estado, motivo), intentos_rechazados
+(hora, IP; sin payload), senales (alerta_id único, ticker BYMA,
+estrategia, acción, estado, vence_en, resultado de EasyTrading: precio,
+nominales, motivo), avisos_easytrading (cierres de posición de corto),
+configuracion (horario, vencimiento, envío a EasyTrading activado),
+feriados (fecha, descripción).
+No hay tabla de posiciones.
 Cripto: tablas propias en su fase.
 
 ## 10. Fases (validar cada una antes de seguir)
 
 WEB:
 
-- F1: proyecto, login, listas corto/intradía (CRUD), mapeo de tickers.
+- F1: proyecto, login, listas corto/intradía (tilde, onda, sub-onda,
+  notas), mapeo de tickers, tilde rápido desde la tabla.
 - F2: webhook + registro de alertas + vista por tipo + botón
-  "simular alerta" para probar sin TradingView. No genera órdenes.
+  "simular alerta" para probar sin TradingView. No genera señales.
   Incluye un cron diario de Vercel que hace una consulta mínima a Supabase
   para evitar que el plan Free pause el proyecto por inactividad.
-- F3: motor de reglas + órdenes pendientes + vencimiento + API EasyTrading.
-  - La orden de compra que toma EasyTrading incluye stop_pct, tp_usd (si
-    hay) y el precio USD de la alerta (para ppc_usd).
-  - Botón "Pausar todo": interruptor general, visible en todas las
-    pantallas, que bloquea al instante la generación de órdenes (las
-    alertas se siguen guardando, descartadas con motivo "pausado").
-  - No se puede borrar un activo con posición abierta.
+- F3: filtro de señales + vencimiento + API EasyTrading (señales, tomar,
+  resultado, aviso de corto cerrado → destildar) + resultado junto a cada
+  alerta.
+  - Interruptor "Envío a EasyTrading: ACTIVADO / PAUSADO", visible en
+    todas las pantallas; en pausa las alertas se siguen guardando,
+    descartadas con motivo "pausado".
 
 EASYTRADING (en su propio repo):
 
-- F4: módulo puente (pull, tomar, reportar) solo en PAPER.
-- F5: posiciones + stop automático + TP local, en PAPER. Evaluar la orden
-  stop en el broker (sección 7, decisiones abiertas).
+- F4: módulo puente (pull, tomar, reportar resultado) solo en PAPER.
+- F5: posiciones + stop / TP / trailing locales + aviso de corto cerrado,
+  en PAPER.
 - F6: REAL con doble candado, 1 nominal primero, después montos chicos.
 
 LUEGO:
 
 - F7: cripto (ejecutor en la nube hacia BingX/Binance; ojo, Binance bloquea
   IPs de EE.UU.).
-- F8: venta de tenencia real del broker. Depende de la "Tenencia real del
-  broker (F4 de EasyTrading)".
+- F8: venta de tenencia real del broker (en EasyTrading).
 
 ## 11. Reglas de trabajo con Claude Code
 
