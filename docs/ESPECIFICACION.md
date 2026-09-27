@@ -94,6 +94,10 @@ Por activo, la web guarda SOLO:
     fecha es hoy (hora de Argentina). No hace falta cron.
 - onda, sub_onda, notas (solo anotación, no afectan ninguna regla).
 
+Borrar un activo de una lista: la confirmación avisa "Si EasyTrading tiene
+una posición abierta de este activo, sus alertas de venta dejarán de
+llegar. ¿Borrar igual?" (la web no sabe de posiciones).
+
 Nominales, tope, stop, TP, trailing y modo PAPER/REAL NO están en la web:
 los configura EasyTrading (sección 7).
 
@@ -111,8 +115,11 @@ del primer punto que falle:
 - No es duplicada: una alerta idéntica (mismo ticker + estrategia + accion)
   a otra recibida en los últimos 30 s → descartada.
 - El ticker está en la lista de esa estrategia.
-- El activo está tildado en esa estrategia (corto: "activo"; intradía:
-  "operar hoy" de hoy).
+- Solo COMPRAS: el activo está tildado en esa estrategia (corto: "activo";
+  intradía: "operar hoy" de hoy). El tilde nunca filtra ventas: una venta
+  pasa aunque el activo esté destildado (por ejemplo, una posición de
+  intradía que quedó abierta de un día para otro). Si no hay nada
+  abierto, EasyTrading responde "sin posición abierta".
 - Interruptor "Envío a EasyTrading" ACTIVADO. En pausa → descartada con
   motivo "pausado".
 
@@ -138,8 +145,11 @@ Destildado automático de CORTO:
 Se diseña en detalle en el repo de EasyTrading; acá solo lo que la web
 necesita saber.
 
-- Tiene su propia lista de activos (doble validación): una señal de un
-  activo que no está en su lista, o con la estrategia apagada, se descarta.
+- Tiene su propia lista de activos (doble validación), que igual que en
+  la web filtra SOLO COMPRAS: una compra de un activo que no está en su
+  lista, o con la estrategia apagada, se descarta. Una venta con posición
+  abierta se ejecuta aunque el activo no esté en su lista. La doble
+  validación protege de entrar por alertas viejas; nunca impide salir.
 - Arma la orden con su propia configuración, en ARS: nominales, tope de
   posición, stop, TP, trailing, modo PAPER/REAL (doble candado con
   EJECUCION_REAL) y la regla de qué vender en cada estrategia.
