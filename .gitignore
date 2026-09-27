@@ -3,24 +3,31 @@
 !.env.example
 
 # Dependencias
-node_modules/
+/node_modules
+/.pnp
+.pnp.*
 
 # Next.js
-.next/
-out/
+/.next/
+/out/
+/build
 next-env.d.ts
 *.tsbuildinfo
 
 # Vercel
-.vercel/
+.vercel
 
 # Tests
-coverage/
+/coverage
+
+# Certificados / claves
+*.pem
 
 # Logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+.pnpm-debug.log*
 
 # Sistema operativo / editores
 .DS_Store
