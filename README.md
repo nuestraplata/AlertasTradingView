@@ -132,6 +132,25 @@ WEBHOOK_CLAVE=<64 caracteres aleatorios>
 
   Mínimo 24 caracteres: si es más corta, el webhook responde 500 y lo
   registra en la consola del servidor.
+- `CRON_SECRET`: secreto del cron diario que evita que Supabase pause el
+  proyecto. Generalo con el mismo comando (un valor **distinto** de
+  `WEBHOOK_CLAVE`). Vercel lo manda solo en cada ejecución.
+
+#### Cron diario (keepalive)
+
+`vercel.json` programa `GET /api/cron/keepalive` una vez por día
+(`0 12 * * *` = entre las 12:00 y las 12:59 UTC, 9 a 10 h de Argentina;
+el plan Hobby no garantiza el minuto). Hace una consulta mínima a
+Supabase para que el plan Free no pause el proyecto por inactividad.
+Solo corre en el deploy de **producción**. Se ve en Vercel → Settings →
+Cron Jobs → **View Logs**.
+
+Probarlo a mano (local o producción):
+
+```powershell
+$secreto = ((Get-Content .env.local) -match '^CRON_SECRET=')[0].Split('=',2)[1]
+Invoke-RestMethod -Uri http://localhost:3000/api/cron/keepalive -Headers @{ Authorization = "Bearer $secreto" }
+```
 
 ### 6. Levantar la app
 
