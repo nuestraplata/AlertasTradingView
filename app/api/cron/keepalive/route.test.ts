@@ -44,7 +44,8 @@ describe("GET /api/cron/keepalive", () => {
     const r = await GET(pedido(`Bearer ${SECRETO}`));
     expect(r.status).toBe(200);
     expect(await r.json()).toMatchObject({ ok: true });
-    expect(consultas).toEqual(["tickers"]);
+    // Tabla donde service_role tiene SELECT (verificado en Postgres local).
+    expect(consultas).toEqual(["alertas"]);
   });
 
   // (Espacios al final no se prueban: la API Headers los recorta, como manda HTTP.)

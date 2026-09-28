@@ -25,7 +25,9 @@ export async function GET(request: Request) {
 
   const inicio = Date.now();
   try {
-    const { error } = await createAdminClient().from("tickers").select("ticker_usa").limit(1);
+    // "alertas": la única tabla que service_role puede leer (migración 3).
+    // tickers / activos son solo del usuario logueado.
+    const { error } = await createAdminClient().from("alertas").select("id").limit(1);
     if (error) throw new Error(`${error.code} ${error.message}`);
   } catch (e) {
     // Queda en los logs de Vercel (Cron Jobs → View Logs).
