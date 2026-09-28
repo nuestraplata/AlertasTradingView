@@ -71,6 +71,13 @@ describe("procesarAlerta: alerta válida", () => {
     expect(alerta({ ...mensaje, ticker: "BATS:BRK.B" }).ticker).toBe("BRK.B");
   });
 
+  it("un placeholder sin reemplazar como prefijo NO se toma como mercado → descartada", () => {
+    // "{{exchange}}:{{ticker}}" simulado: {{exchange}} queda literal.
+    const a = alerta({ ...mensaje, ticker: "{{exchange}}:AAPL" });
+    expect(a).toMatchObject({ ticker: null, estado: "descartada" });
+    expect(a.motivo).toMatch(/"ticker" inválido: "\{\{exchange\}\}:AAPL"/);
+  });
+
   it("precio como número o texto; redondea a 6 decimales; acepta coma", () => {
     expect(alerta({ ...mensaje, precio: 185.25 }).precio_usd).toBe(185.25);
     expect(alerta({ ...mensaje, precio: "0.123456789" }).precio_usd).toBe(0.123457);

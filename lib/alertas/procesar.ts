@@ -1,5 +1,5 @@
-import { createHash, timingSafeEqual } from "node:crypto";
 import { ESTRATEGIAS, tickerUsa, type Estrategia } from "@/lib/activos/schema";
+import { secretoCorrecto } from "@/lib/secretos";
 
 // Procesa el cuerpo de un pedido al webhook (o de "simular alerta") y
 // decide qué guardar. Función pura: no toca la base ni la red. El mismo
@@ -62,18 +62,11 @@ export function procesarAlerta(e: EntradaProceso): ResultadoProceso {
   }
 
   const { clave, ...payload } = datos as Record<string, unknown>;
-  if (!claveCorrecta(clave, e.claveEsperada)) {
+  if (!secretoCorrecto(clave, e.claveEsperada)) {
     return { tipo: "rechazo", motivo: "clave_invalida", http: 401 };
   }
 
   return { tipo: "alerta", alerta: armarAlerta(payload, e.origen), http: 200 };
-}
-
-/** Compara en tiempo constante (no da pistas de cuánto se acertó). */
-function claveCorrecta(recibida: unknown, esperada: string): boolean {
-  if (typeof recibida !== "string" || recibida === "" || esperada === "") return false;
-  const h = (s: string) => createHash("sha256").update(s, "utf8").digest();
-  return timingSafeEqual(h(recibida), h(esperada));
 }
 
 type Campo<T> = { valor: T | null; error: string | null };
