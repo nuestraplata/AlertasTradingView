@@ -9,6 +9,7 @@ const PREFIJOS_PUBLICOS = [
   RUTA_LOGIN,
   "/api/webhook", // F2: TradingView (valida "clave")
   "/api/easytrading", // F3: EasyTrading (valida token propio)
+  "/api/cron", // Vercel Cron (valida CRON_SECRET; no sigue redirecciones)
 ];
 
 /** true si la ruta es pública. Compara por segmento: "/loginx" no es "/login". */

@@ -52,7 +52,7 @@ export function validarSupabaseEnv(
  * alfabetos (p. ej. "а" cirílica). new URL() los acepta y después el DNS falla
  * con un "fetch failed" que no dice nada.
  */
-function verificarCaracteres(variable: string, valor: string) {
+export function verificarCaracteres(variable: string, valor: string) {
   const i = [...valor].findIndex((c) => !/^[\x21-\x7e]$/.test(c));
   if (i === -1) return;
   const c = [...valor][i];
@@ -61,6 +61,32 @@ function verificarCaracteres(variable: string, valor: string) {
     `${variable} tiene un carácter inválido (${codigo}) en la posición ${i + 1}. ` +
       "Escribila de nuevo a mano en .env.local.",
   );
+}
+
+/**
+ * Clave secreta de Supabase (rol service_role, saltea RLS). SOLO servidor:
+ * nunca con prefijo NEXT_PUBLIC_. La usan el webhook y "simular alerta".
+ */
+export function validarSecretKey(valor: string | undefined): string {
+  if (!valor) throw new Error("Falta SUPABASE_SECRET_KEY (ver .env.example).");
+  verificarCaracteres("SUPABASE_SECRET_KEY", valor);
+  if (!valor.startsWith("sb_secret_")) {
+    throw new Error("SUPABASE_SECRET_KEY tiene que empezar con sb_secret_");
+  }
+  return valor;
+}
+
+/**
+ * Secretos propios (WEBHOOK_CLAVE, CRON_SECRET): obligatorios, ASCII
+ * visible y al menos 24 caracteres, para que no se puedan adivinar.
+ */
+export function validarSecreto(variable: string, valor: string | undefined): string {
+  if (!valor) throw new Error(`Falta ${variable} (ver .env.example).`);
+  verificarCaracteres(variable, valor);
+  if (valor.length < 24) {
+    throw new Error(`${variable} es demasiado corta: mínimo 24 caracteres (ver README).`);
+  }
+  return valor;
 }
 
 export function supabaseEnv(): SupabaseEnv {

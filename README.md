@@ -75,6 +75,7 @@ En https://supabase.com, dentro del proyecto (región **South America (São Paul
    orden** el contenido completo de cada archivo de `supabase/migrations/`:
    1. `20260926190000_tickers_y_activos.sql`
    2. `20260927120000_activos_solo_tilde_y_notas.sql`
+   3. `20260927180000_alertas.sql`
 
    Cada una tiene que decir *"Success. No rows returned"*. Son
    todo-o-nada: si una falla, no deja nada a medias. **No las corras dos
@@ -90,6 +91,19 @@ En https://supabase.com, dentro del proyecto (región **South America (São Paul
 
    Tiene que devolver: `id, ticker_usa, estrategia, onda, sub_onda, notas,
    activo, operar_hoy_fecha, created_at, updated_at`.
+
+   Y las tablas de alertas (F2), con estos permisos:
+
+   ```sql
+   select c.relname as tabla, c.relrowsecurity as rls,
+          has_table_privilege('service_role', c.oid, 'INSERT') as servidor_inserta,
+          has_table_privilege('authenticated', c.oid, 'INSERT') as panel_inserta
+   from pg_class c
+   where c.relnamespace = 'public'::regnamespace
+     and c.relname in ('alertas', 'intentos_rechazados');
+   ```
+
+   2 filas con `rls = true`, `servidor_inserta = true`, `panel_inserta = false`.
 
 ### 5. Variables de entorno (`.env.local`)
 
@@ -112,6 +126,45 @@ NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
   invisible: la app lo detecta y dice cuál y en qué posición. En ese caso
   **escribí la URL a mano**.
 - `.env.local` **nunca se commitea** (está en `.gitignore`).
+
+#### Variables de F2 (webhook)
+
+```
+SUPABASE_SECRET_KEY=sb_secret_...
+WEBHOOK_CLAVE=<64 caracteres aleatorios>
+```
+
+- `SUPABASE_SECRET_KEY`: Supabase → **Project Settings → API Keys** →
+  secret key. Da acceso total a la base: **solo servidor**, nunca con
+  prefijo `NEXT_PUBLIC_`, nunca en el navegador ni en un mensaje.
+- `WEBHOOK_CLAVE`: la clave que va en el campo `"clave"` del mensaje de
+  TradingView. Generala en PowerShell (sirve también para otros secretos):
+
+  ```powershell
+  $b = New-Object byte[] 32; [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); -join ($b | ForEach-Object { $_.ToString("x2") })
+  ```
+
+  Mínimo 24 caracteres: si es más corta, el webhook responde 500 y lo
+  registra en la consola del servidor.
+- `CRON_SECRET`: secreto del cron diario que evita que Supabase pause el
+  proyecto. Generalo con el mismo comando (un valor **distinto** de
+  `WEBHOOK_CLAVE`). Vercel lo manda solo en cada ejecución.
+
+#### Cron diario (keepalive)
+
+`vercel.json` programa `GET /api/cron/keepalive` una vez por día
+(`0 12 * * *` = entre las 12:00 y las 12:59 UTC, 9 a 10 h de Argentina;
+el plan Hobby no garantiza el minuto). Hace una consulta mínima a
+Supabase para que el plan Free no pause el proyecto por inactividad.
+Solo corre en el deploy de **producción**. Se ve en Vercel → Settings →
+Cron Jobs → **View Logs**.
+
+Probarlo a mano (local o producción):
+
+```powershell
+$secreto = ((Get-Content .env.local) -match '^CRON_SECRET=')[0].Split('=',2)[1]
+Invoke-RestMethod -Uri http://localhost:3000/api/cron/keepalive -Headers @{ Authorization = "Bearer $secreto" }
+```
 
 ### 6. Levantar la app
 
@@ -143,13 +196,51 @@ Antes de cada commit: `npm test`, `npm run lint` y `npm run build` en verde.
 
 ## Deploy en Vercel
 
-1. **Add New → Project** → importá el repo de GitHub.
-2. **Settings → Environment Variables**: cargá `NEXT_PUBLIC_SUPABASE_URL` y
-   `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` (Production y Preview).
+1. **Add New → Project** → importá el repo de GitHub (si no aparece:
+   **Adjust GitHub App Permissions** y dale acceso al repo).
+2. **Antes del primer deploy**, en **Environment Variables**, cargá las 5
+   variables para **Production** y **Preview**:
+
+   | Variable | Valor | Sensitive |
+   |---|---|---|
+   | `NEXT_PUBLIC_SUPABASE_URL` | URL del proyecto de Supabase | No |
+   | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | `sb_publishable_…` | No |
+   | `SUPABASE_SECRET_KEY` | `sb_secret_…` | **Sí** |
+   | `WEBHOOK_CLAVE` | secreto propio de producción (≥ 24) | **Sí** |
+   | `CRON_SECRET` | secreto propio de producción (≥ 24) | **Sí** |
+
+   - Las `NEXT_PUBLIC_*` se incorporan **al build**: si cambian, hace falta
+     **Redeploy**. Las demás se leen en cada pedido, pero también requieren
+     redeploy para tomar el valor nuevo.
+   - `WEBHOOK_CLAVE` y `CRON_SECRET` de producción son **distintos** de los
+     de `.env.local` y se guardan en un gestor de contraseñas.
 3. La región (`gru1`, São Paulo) la fija `vercel.json` y la versión de Node
-   (24.x) la fija `package.json`: no hay que tocarlas.
+   (24.x) la fija `package.json`: no hay que tocarlas. Se verifica en el
+   deploy → **Functions**: región `gru1`.
 4. `main` se publica en producción; cada push a `desarrollo` genera una
-   URL de "preview".
+   URL de "preview" (protegida con login de Vercel).
+5. **Webhook**: en producción solo acepta pedidos desde las IPs de
+   TradingView (`lib/alertas/ip.ts`). Un pedido desde tu PC con la clave
+   correcta responde **403** y queda como "IP no permitida": es lo esperado.
+   En los previews el webhook no se puede probar desde afuera (login de
+   Vercel).
+6. **Cron**: Vercel → **Settings → Cron Jobs** muestra
+   `/api/cron/keepalive` (`0 12 * * *`). Solo corre en producción; los
+   resultados, en **View Logs**.
+
+### Probar producción desde PowerShell
+
+Piden la URL y el secreto sin mostrarlos ni guardarlos en el historial:
+
+```powershell
+$url = (Read-Host "URL de producción (https://...vercel.app)").TrimEnd("/")
+$sec = Read-Host "CRON_SECRET de producción" -AsSecureString
+$cron = [System.Net.NetworkCredential]::new("", $sec).Password
+Invoke-RestMethod -Uri "$url/api/cron/keepalive" -Headers @{ Authorization = "Bearer $cron" }
+Remove-Variable cron, sec
+```
+
+Tiene que responder `ok : True`.
 
 ---
 

@@ -3,8 +3,15 @@ import { RUTA_INICIO, RUTA_LOGIN, esRutaPublica } from "@/lib/auth/rutas";
 import { actualizarSesion } from "@/lib/supabase/proxy";
 
 export async function proxy(request: NextRequest) {
-  const { response, claims } = await actualizarSesion(request);
   const { pathname, search } = request.nextUrl;
+
+  // APIs públicas (webhook, EasyTrading): se autentican solas y no usan la
+  // sesión del panel. Pasan directo, sin consultar Supabase.
+  if (pathname.startsWith("/api/") && esRutaPublica(pathname)) {
+    return NextResponse.next();
+  }
+
+  const { response, claims } = await actualizarSesion(request);
 
   if (esRutaPublica(pathname)) {
     // Ya logueado y entra a /login → al panel.
