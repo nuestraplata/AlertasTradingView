@@ -75,6 +75,7 @@ En https://supabase.com, dentro del proyecto (región **South America (São Paul
    orden** el contenido completo de cada archivo de `supabase/migrations/`:
    1. `20260926190000_tickers_y_activos.sql`
    2. `20260927120000_activos_solo_tilde_y_notas.sql`
+   3. `20260927180000_alertas.sql`
 
    Cada una tiene que decir *"Success. No rows returned"*. Son
    todo-o-nada: si una falla, no deja nada a medias. **No las corras dos
@@ -90,6 +91,19 @@ En https://supabase.com, dentro del proyecto (región **South America (São Paul
 
    Tiene que devolver: `id, ticker_usa, estrategia, onda, sub_onda, notas,
    activo, operar_hoy_fecha, created_at, updated_at`.
+
+   Y las tablas de alertas (F2), con estos permisos:
+
+   ```sql
+   select c.relname as tabla, c.relrowsecurity as rls,
+          has_table_privilege('service_role', c.oid, 'INSERT') as servidor_inserta,
+          has_table_privilege('authenticated', c.oid, 'INSERT') as panel_inserta
+   from pg_class c
+   where c.relnamespace = 'public'::regnamespace
+     and c.relname in ('alertas', 'intentos_rechazados');
+   ```
+
+   2 filas con `rls = true`, `servidor_inserta = true`, `panel_inserta = false`.
 
 ### 5. Variables de entorno (`.env.local`)
 
@@ -182,13 +196,51 @@ Antes de cada commit: `npm test`, `npm run lint` y `npm run build` en verde.
 
 ## Deploy en Vercel
 
-1. **Add New → Project** → importá el repo de GitHub.
-2. **Settings → Environment Variables**: cargá `NEXT_PUBLIC_SUPABASE_URL` y
-   `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` (Production y Preview).
+1. **Add New → Project** → importá el repo de GitHub (si no aparece:
+   **Adjust GitHub App Permissions** y dale acceso al repo).
+2. **Antes del primer deploy**, en **Environment Variables**, cargá las 5
+   variables para **Production** y **Preview**:
+
+   | Variable | Valor | Sensitive |
+   |---|---|---|
+   | `NEXT_PUBLIC_SUPABASE_URL` | URL del proyecto de Supabase | No |
+   | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | `sb_publishable_…` | No |
+   | `SUPABASE_SECRET_KEY` | `sb_secret_…` | **Sí** |
+   | `WEBHOOK_CLAVE` | secreto propio de producción (≥ 24) | **Sí** |
+   | `CRON_SECRET` | secreto propio de producción (≥ 24) | **Sí** |
+
+   - Las `NEXT_PUBLIC_*` se incorporan **al build**: si cambian, hace falta
+     **Redeploy**. Las demás se leen en cada pedido, pero también requieren
+     redeploy para tomar el valor nuevo.
+   - `WEBHOOK_CLAVE` y `CRON_SECRET` de producción son **distintos** de los
+     de `.env.local` y se guardan en un gestor de contraseñas.
 3. La región (`gru1`, São Paulo) la fija `vercel.json` y la versión de Node
-   (24.x) la fija `package.json`: no hay que tocarlas.
+   (24.x) la fija `package.json`: no hay que tocarlas. Se verifica en el
+   deploy → **Functions**: región `gru1`.
 4. `main` se publica en producción; cada push a `desarrollo` genera una
-   URL de "preview".
+   URL de "preview" (protegida con login de Vercel).
+5. **Webhook**: en producción solo acepta pedidos desde las IPs de
+   TradingView (`lib/alertas/ip.ts`). Un pedido desde tu PC con la clave
+   correcta responde **403** y queda como "IP no permitida": es lo esperado.
+   En los previews el webhook no se puede probar desde afuera (login de
+   Vercel).
+6. **Cron**: Vercel → **Settings → Cron Jobs** muestra
+   `/api/cron/keepalive` (`0 12 * * *`). Solo corre en producción; los
+   resultados, en **View Logs**.
+
+### Probar producción desde PowerShell
+
+Piden la URL y el secreto sin mostrarlos ni guardarlos en el historial:
+
+```powershell
+$url = (Read-Host "URL de producción (https://...vercel.app)").TrimEnd("/")
+$sec = Read-Host "CRON_SECRET de producción" -AsSecureString
+$cron = [System.Net.NetworkCredential]::new("", $sec).Password
+Invoke-RestMethod -Uri "$url/api/cron/keepalive" -Headers @{ Authorization = "Bearer $cron" }
+Remove-Variable cron, sec
+```
+
+Tiene que responder `ok : True`.
 
 ---
 
