@@ -7,7 +7,9 @@ registra y, si el activo está tildado en su estrategia y el envío está
 activado, las pasa como SEÑAL a EasyTrading (PC local). EasyTrading decide
 con su propia configuración si opera y cómo, ejecuta en Cocos Capital y
 devuelve el resultado, que la web muestra junto a la alerta.
-La PC nunca se expone a internet: EasyTrading CONSULTA a la web (pull).
+La PC nunca se expone a internet: EasyTrading CONSULTA (pull), conectado
+directo a Postgres de Supabase con un usuario propio que solo puede
+ejecutar 4 funciones (sección 3).
 Cripto (BingX/Binance) queda para una fase posterior, separada.
 
 La web NO arma órdenes, NO guarda posiciones y NO calcula resultados:
@@ -18,8 +20,8 @@ eso es responsabilidad de EasyTrading (sección 7).
 - Next.js + Supabase (Postgres) + Vercel, planes gratuitos.
 - Repo nuevo y PRIVADO, separado de EasyTrading.
 - Región: Supabase y funciones de Vercel en São Paulo (gru1) por latencia.
-- Login single-user obligatorio para toda la web (excepto el webhook y la
-  API de EasyTrading, que tienen su propia autenticación).
+- Login single-user obligatorio para toda la web (excepto el webhook y el
+  cron, que tienen su propia autenticación).
   Supabase Auth con email + contraseña, sin registro público (el usuario
   se crea a mano en Supabase).
 - Secretos en variables de entorno, nunca en el código.
@@ -36,19 +38,24 @@ eso es responsabilidad de EasyTrading (sección 7).
    la guarda y responde rápido (TradingView corta a los ~3 s).
 2. Filtro de señales (en la web): decide si la alerta pasa a EasyTrading
    como señal pendiente o se descarta, siempre registrando el motivo.
-3. API para EasyTrading (protegida con token propio,
-   `Authorization: Bearer <EASYTRADING_TOKEN>`). Contrato completo en
-   [API_EASYTRADING.md](API_EASYTRADING.md):
-   - GET /api/easytrading/senales: señales pendientes
-   - POST /api/easytrading/senales/{id}/tomar (atómico: pendiente → tomada;
-     si ya fue tomada, venció o está en pausa, falla con 409)
-   - POST /api/easytrading/senales/{id}/resultado: ejecutada (precio ARS,
-     nominales y modo PAPER/REAL, solo registro) o descartada por
-     EasyTrading (con motivo)
-   - POST /api/easytrading/posicion-cerrada: aviso de posición de CORTO
+3. Canal con EasyTrading: SIN HTTP. EasyTrading se conecta directo a
+   Postgres de Supabase (session pooler, IPv4, SSL) con el usuario
+   easytrading_bot, que SOLO puede ejecutar 4 funciones (no lee ni
+   escribe ninguna tabla):
+   - easytrading_pendientes(): señales pendientes
+   - easytrading_tomar(id) (atómico: pendiente → tomada; si ya fue
+     tomada, venció o está en pausa, no la entrega)
+   - easytrading_resultado(...): ejecutada (precio ARS, nominales y modo
+     PAPER/REAL, solo registro) o descartada por EasyTrading (con motivo)
+   - easytrading_posicion_cerrada(...): aviso de posición de CORTO
      cerrada (sección 8)
-   El token vive en una variable de entorno de Vercel: se revoca
-   cambiándolo y haciendo Redeploy. Para cortar al instante: "Pausar todo".
+   Son SECURITY DEFINER con search_path fijo, validan cada parámetro y
+   usan la hora del servidor. Contrato completo:
+   [API_EASYTRADING.md](API_EASYTRADING.md).
+   Por qué no HTTP: consultar a Vercel cada pocos segundos podía agotar la
+   CPU del plan Hobby (tope duro) y tirar también el webhook.
+   Revocar el acceso: `alter role easytrading_bot nologin;` (o cambiarle
+   la contraseña). Para cortar al instante sin tocar el rol: "Pausar todo".
 4. Panel web: listas corto/intradía (tildes y anotaciones), tickers,
    alertas con su estado y el resultado de EasyTrading, interruptor
    "Envío a EasyTrading", configuración (horario de mercado y feriados).
@@ -132,7 +139,9 @@ falle:
 - No es duplicada: una alerta idéntica (mismo ticker + estrategia + accion)
   a otra recibida en los últimos 30 s → descartada. Cuenta cualquier
   alerta con datos válidos de los últimos 30 s, aunque haya sido
-  descartada o simulada (ante la duda, una orden de menos).
+  descartada (ante la duda, una orden de menos). Una alerta simulada solo
+  cuenta contra otras simuladas: nunca bloquea a una real de TradingView
+  (una real sí bloquea a una simulada).
 - El ticker está en la lista de esa estrategia.
 - Solo COMPRAS: el activo está tildado en esa estrategia (corto: "activo";
   intradía: "operar hoy" de hoy). El tilde nunca filtra ventas: una venta
@@ -194,8 +203,9 @@ necesita saber.
 - Avisa a la web cuando se cierra toda una posición de CORTO (sección 8).
 - Guarda el ID de señal: al reconectar, nunca re-ejecuta una señal ya
   tomada.
-- El polling va por HTTPS a la web: NO consume getToken ni WebSocket de
-  Primary (límites de 1/día intactos).
+- El polling va directo a Postgres de Supabase (no a Vercel ni a
+  Primary): NO consume getToken ni WebSocket de Primary (límites de 1/día
+  intactos) ni CPU de Vercel.
 
 Decisiones abiertas (a resolver en EasyTrading):
 
@@ -212,12 +222,11 @@ Decisiones abiertas (a resolver en EasyTrading):
 
 ## 8. Aviso de posición de corto cerrada
 
-EasyTrading llama a la API de la web (no escribe directo en Supabase):
+EasyTrading llama a la función public.easytrading_posicion_cerrada (no
+escribe en las tablas):
 
-- POST /api/easytrading/posicion-cerrada, con el mismo token que el resto
-  de la API. Cuerpo: ticker BYMA, estrategia ("corto"), hora del cierre
-  (ISO 8601 con zona horaria) y, si lo hubo, el ID de la señal que lo
-  cerró.
+- Parámetros: ticker BYMA, estrategia ("corto"), hora del cierre (con zona
+  horaria) y, si lo hubo, el ID de la señal que lo cerró.
 - La web busca el activo por ticker BYMA (vía "tickers") en la lista de
   corto, lo destilda y registra el aviso. Si ya estaba destildado, no hace
   nada y responde OK (idempotente: EasyTrading puede reintentar).
@@ -226,10 +235,9 @@ EasyTrading llama a la API de la web (no escribe directo en Supabase):
 - Si el ticker no está en la lista de corto, responde OK y registra el
   aviso con motivo "no está en la lista".
 
-Por qué por API y no escribiendo en Supabase: EasyTrading usa una sola
-credencial (el token), que se revoca desde la web; no hace falta darle a
-la PC una clave con acceso a la base, y la regla de destildado queda en un
-solo lugar.
+Por qué por una función y no escribiendo en las tablas: el usuario de
+EasyTrading no tiene acceso a ninguna tabla, y la regla de destildado
+queda en un solo lugar (la base).
 
 ## 9. Tablas (orientativo)
 
@@ -256,17 +264,20 @@ WEB:
   "simular alerta" para probar sin TradingView. No genera señales.
   Incluye un cron diario de Vercel que hace una consulta mínima a Supabase
   para evitar que el plan Free pause el proyecto por inactividad.
-- F3: filtro de señales + vencimiento + API EasyTrading (señales, tomar,
-  resultado, aviso de corto cerrado → destildar) + resultado junto a cada
-  alerta. Migración 4.
+- F3: filtro de señales + vencimiento + funciones para EasyTrading
+  (pendientes, tomar, resultado, aviso de corto cerrado → destildar) +
+  resultado junto a cada alerta. Migraciones 4 y 5.
   - Interruptor "Envío a EasyTrading: ACTIVADO / PAUSADO", visible en
     todas las pantallas; en pausa las alertas se siguen guardando,
     descartadas con motivo "pausado".
   - Pantalla Configuración: horario de mercado y feriados.
+  - Señales tomadas sin resultado, con "hace cuánto", por si EasyTrading
+    se cae después de tomar una.
 
 EASYTRADING (en su propio repo):
 
-- F4: módulo puente (pull, tomar, reportar resultado) solo en PAPER.
+- F4: módulo puente (pull directo a Postgres, tomar, reportar resultado)
+  solo en PAPER. Contrato: docs/API_EASYTRADING.md.
 - F5: posiciones + stop / TP / trailing locales + aviso de corto cerrado,
   en PAPER.
 - F6: REAL con doble candado, 1 nominal primero, después montos chicos.

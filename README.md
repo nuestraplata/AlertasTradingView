@@ -8,11 +8,12 @@ devuelve el resultado. La web no arma órdenes ni guarda posiciones.
 - Especificación completa: [docs/ESPECIFICACION.md](docs/ESPECIFICACION.md)
 - Stack: Next.js 16 + Supabase (Postgres + Auth) + Vercel, región São Paulo.
 
-- Contrato de la API para EasyTrading: [docs/API_EASYTRADING.md](docs/API_EASYTRADING.md)
+- Contrato con EasyTrading (conexión directa a Postgres): [docs/API_EASYTRADING.md](docs/API_EASYTRADING.md)
 
 **Estado:** Fase 3 (login, listas corto/intradía, tickers, webhook de
-TradingView, filtro de señales, API para EasyTrading, interruptor "Envío
-a EasyTrading", horario y feriados). El módulo puente de EasyTrading se
+TradingView, filtro de señales, funciones para EasyTrading con su propio
+usuario de Postgres, interruptor "Envío a EasyTrading", horario y
+feriados). El módulo puente de EasyTrading se
 hace en su propio repo (F4).
 
 ---
@@ -81,6 +82,7 @@ En https://supabase.com, dentro del proyecto (región **South America (São Paul
    2. `20260927120000_activos_solo_tilde_y_notas.sql`
    3. `20260927180000_alertas.sql`
    4. `20261001120000_senales.sql`
+   5. `20261002120000_easytrading_bot.sql` (después de la 4)
 
    Cada una tiene que decir *"Success. No rows returned"*. Son
    todo-o-nada: si una falla, no deja nada a medias. **No las corras dos
@@ -128,6 +130,55 @@ En https://supabase.com, dentro del proyecto (región **South America (São Paul
    configuración: `false`, `11:00:00`, `17:00:00` (el envío arranca
    **pausado**).
 
+   Y el usuario de EasyTrading (migración 5). Qué funciones puede ejecutar
+   fuera del catálogo de Postgres:
+
+   ```sql
+   select n.nspname || '.' || p.oid::regprocedure::text as funcion
+   from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname not in ('pg_catalog', 'information_schema')
+     and has_schema_privilege('easytrading_bot', n.oid, 'USAGE')
+     and has_function_privilege('easytrading_bot', p.oid, 'EXECUTE')
+   order by 1;
+   ```
+
+   Tienen que salir **exactamente 4**, todas de `public`:
+   `easytrading_pendientes()`, `easytrading_posicion_cerrada(…)`,
+   `easytrading_resultado(…)` y `easytrading_tomar(bigint)`. Si sale
+   alguna más (por ejemplo de `extensions`), avisá antes de seguir.
+
+   Y que no tenga acceso a ninguna tabla de ningún esquema:
+
+   ```sql
+   select c.oid::regclass as tabla
+   from pg_class c join pg_namespace n on n.oid = c.relnamespace
+   where n.nspname not in ('pg_catalog', 'information_schema')
+     and c.relkind in ('r', 'v', 'm', 'p', 'f')
+     and has_table_privilege('easytrading_bot', c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE');
+   ```
+
+   Tiene que devolver **0 filas**.
+
+5. **Contraseña del usuario de EasyTrading** (la migración 5 lo crea
+   **sin** login ni contraseña). Generá una contraseña con el mismo
+   comando de PowerShell de las claves (64 caracteres, solo letras y
+   números: no hace falta escaparla) y en **SQL Editor → New query**
+   corré, reemplazando el valor:
+
+   ```sql
+   alter role easytrading_bot with login password 'PEGAR_ACA_LA_CONTRASEÑA';
+   ```
+
+   - Corrélo en una pestaña nueva y **no la guardes** (los snippets
+     guardados quedan en Supabase). Después cerrá la pestaña.
+   - Guardá la contraseña en el gestor de contraseñas: la usa EasyTrading
+     (F4), no esta web.
+   - Para cambiarla: el mismo comando con otra. Para cortarle el acceso:
+     `alter role easytrading_bot nologin;`
+   - Comprobar: `select rolcanlogin from pg_roles where rolname = 'easytrading_bot';` → `true`.
+   - Probar la conexión desde la PC: ver
+     [docs/API_EASYTRADING.md](docs/API_EASYTRADING.md#probar-la-conexión-a-mano-psql).
+
 ### 5. Variables de entorno (`.env.local`)
 
 ```powershell
@@ -173,18 +224,6 @@ WEBHOOK_CLAVE=<64 caracteres aleatorios>
   proyecto. Generalo con el mismo comando (un valor **distinto** de
   `WEBHOOK_CLAVE`). Vercel lo manda solo en cada ejecución.
 
-#### Variable de F3 (API para EasyTrading)
-
-```
-EASYTRADING_TOKEN=<64 caracteres aleatorios>
-```
-
-- Token con el que EasyTrading se autentica contra `/api/easytrading/*`.
-  Generalo con el mismo comando (un valor **distinto** de los otros dos).
-- Si falta o tiene menos de 24 caracteres, la API responde 500 y lo
-  registra en la consola del servidor.
-- En EasyTrading se configura el **mismo** valor (en F4).
-
 #### Cron diario (keepalive)
 
 `vercel.json` programa `GET /api/cron/keepalive` una vez por día
@@ -228,8 +267,9 @@ del paso 4.2.
 Antes de cada commit: `npm test`, `npm run lint` y `npm run build` en verde.
 
 `npm test` también corre las migraciones en un Postgres en memoria
-(PGlite) y prueba el filtro de señales, la API y los permisos por rol
-contra el SQL real. No toca Supabase.
+(PGlite) y prueba el filtro de señales, las funciones de EasyTrading y
+los permisos de cada rol (incluido `easytrading_bot`) contra el SQL real.
+No toca Supabase.
 
 ---
 
@@ -237,7 +277,7 @@ contra el SQL real. No toca Supabase.
 
 1. **Add New → Project** → importá el repo de GitHub (si no aparece:
    **Adjust GitHub App Permissions** y dale acceso al repo).
-2. **Antes del primer deploy**, en **Environment Variables**, cargá las 6
+2. **Antes del primer deploy**, en **Environment Variables**, cargá las 5
    variables para **Production** y **Preview**:
 
    | Variable | Valor | Sensitive |
@@ -247,14 +287,15 @@ contra el SQL real. No toca Supabase.
    | `SUPABASE_SECRET_KEY` | `sb_secret_…` | **Sí** |
    | `WEBHOOK_CLAVE` | secreto propio de producción (≥ 24) | **Sí** |
    | `CRON_SECRET` | secreto propio de producción (≥ 24) | **Sí** |
-   | `EASYTRADING_TOKEN` | secreto propio de producción (≥ 24) | **Sí** |
 
    - Las `NEXT_PUBLIC_*` se incorporan **al build**: si cambian, hace falta
      **Redeploy**. Las demás se leen en cada pedido, pero también requieren
      redeploy para tomar el valor nuevo.
-   - `WEBHOOK_CLAVE`, `CRON_SECRET` y `EASYTRADING_TOKEN` de producción son
-     **distintos** de los de `.env.local` y se guardan en un gestor de
-     contraseñas.
+   - `WEBHOOK_CLAVE` y `CRON_SECRET` de producción son **distintos** de los
+     de `.env.local` y se guardan en un gestor de contraseñas.
+   - EasyTrading no usa variables de Vercel: se conecta directo a
+     Postgres con `easytrading_bot` (si quedó cargada `EASYTRADING_TOKEN`
+     de una versión anterior, se puede borrar).
 3. La región (`gru1`, São Paulo) la fija `vercel.json` y la versión de Node
    (24.x) la fija `package.json`: no hay que tocarlas. Se verifica en el
    deploy → **Functions**: región `gru1`.
@@ -283,33 +324,6 @@ Remove-Variable cron, sec
 
 Tiene que responder `ok : True`.
 
-### Probar la API de EasyTrading desde PowerShell
-
-Sirve en local (`http://localhost:3000`) o en producción. Pide el token
-sin mostrarlo:
-
-```powershell
-$url = (Read-Host "URL (http://localhost:3000 o https://...vercel.app)").TrimEnd("/")
-$sec = Read-Host "EASYTRADING_TOKEN" -AsSecureString
-$h = @{ Authorization = "Bearer " + [System.Net.NetworkCredential]::new("", $sec).Password }
-
-# 1. Señales pendientes
-Invoke-RestMethod -Uri "$url/api/easytrading/senales" -Headers $h | ConvertTo-Json -Depth 5
-
-# 2. Tomar la señal 1 (cambiá el número)
-Invoke-RestMethod -Method Post -Uri "$url/api/easytrading/senales/1/tomar" -Headers $h
-
-# 3. Informar el resultado
-$cuerpo = @{ estado = "ejecutada"; precio_ars = 15230.5; nominales = 1; modo = "PAPER" } | ConvertTo-Json
-Invoke-RestMethod -Method Post -Uri "$url/api/easytrading/senales/1/resultado" -Headers $h -ContentType "application/json" -Body $cuerpo
-
-Remove-Variable h, sec
-```
-
-Un 409 (`no_disponible` / `pausado`) llega a PowerShell como error rojo
-con el JSON adentro: es la respuesta esperada cuando la señal ya se tomó,
-venció o el envío está en pausa.
-
 ---
 
 ## Estructura
@@ -323,7 +337,6 @@ app/
     configuracion/       Horario de mercado y feriados
     tickers/             Mapeo ticker USA → CEDEAR
   api/webhook/           Webhook de TradingView
-  api/easytrading/       API para EasyTrading (docs/API_EASYTRADING.md)
   api/cron/              Cron diario (keepalive)
 components/              Componentes compartidos (avisos, navegación, activos)
 lib/
@@ -332,7 +345,6 @@ lib/
   alertas/               Procesar y registrar alertas, filtros de la pantalla
   configuracion/         Validación de horario y feriados
   db/                    Traducción de errores de la base
-  easytrading/           Autenticación y validación de la API
   senales/               Cómo se muestra cada señal
   supabase/              Clientes de Supabase y validación de variables
   tickers/               "Usado en" de cada ticker

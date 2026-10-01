@@ -1,11 +1,14 @@
-# API para EasyTrading (contrato)
+# EasyTrading ↔ Alertas TradingView (contrato)
 
 Contrato entre la web (Alertas TradingView) y el módulo puente de
 EasyTrading. El módulo puente se implementa en el repo de EasyTrading
 (F4); este documento es lo que tiene que respetar.
 
-**Modelo pull:** EasyTrading consulta a la web. La PC nunca se expone a
-internet y no tiene credenciales de la base: solo este token.
+**Modelo pull, sin HTTP:** EasyTrading se conecta **directo a Postgres**
+de Supabase (pooler, IPv4) con un usuario propio, `easytrading_bot`, y
+llama a 4 funciones. La PC nunca se expone a internet. No pasa por Vercel:
+consultar cada pocos segundos por HTTP podía agotar la CPU del plan Hobby
+y tirar también el webhook de TradingView.
 
 **La web no arma órdenes.** Entrega señales ("comprar/vender este CEDEAR
 en esta estrategia") y guarda lo que EasyTrading informa. Nominales,
@@ -14,23 +17,37 @@ viven en EasyTrading, todo en ARS.
 
 ---
 
-## Autenticación
+## Conexión
 
-Todas las llamadas llevan:
+| Dato | Valor |
+|---|---|
+| Host | El del **Session pooler** de Supabase: Dashboard → **Connect** → *Session pooler*. Tiene la forma `aws-0-sa-east-1.pooler.supabase.com` (puede ser `aws-1-…`): copialo de ahí. |
+| Puerto | `5432` (session pooler) |
+| Base | `postgres` |
+| Usuario | `easytrading_bot.<project_ref>` (ej.: `easytrading_bot.abcdefghijklmnop`). El `project_ref` es el código de la URL del proyecto: `https://<project_ref>.supabase.co`. |
+| Contraseña | La que cargó Fran con `alter role` (README, paso 4). Guardarla en un gestor de contraseñas y en una variable de entorno de la PC, nunca en el código. |
+| SSL | `sslmode=require` como mínimo. Mejor `sslmode=verify-full` con el certificado de Supabase (Dashboard → Database → SSL Configuration → *Download certificate*) en `sslrootcert`. |
 
 ```
-Authorization: Bearer <EASYTRADING_TOKEN>
+postgresql://easytrading_bot.<project_ref>:<contraseña>@<host-del-pooler>:5432/postgres?sslmode=require
 ```
 
-- `Bearer` con B mayúscula y **un** espacio; el token exacto (sin
-  espacios ni saltos de línea).
-- Token incorrecto o ausente → `401 {"ok": false}` (sin detalles).
-- `500 {"ok": false}` → el servidor no tiene el token configurado.
-- Revocar: cambiar `EASYTRADING_TOKEN` en Vercel y hacer **Redeploy**.
-  Para cortar todo al instante, usar **"Pausar todo"** en el panel.
+- **Por qué el pooler:** la conexión directa (`db.<project_ref>.supabase.co`)
+  es solo IPv6; el pooler acepta IPv4.
+- **Session y no transaction pooler (6543):** el modo transacción no
+  admite sentencias preparadas, que psycopg usa solo. Si igual se usa el
+  6543, conectar con `prepare_threshold=None`.
+- **Autocommit:** cada llamada es su propia transacción. No abrir
+  transacciones largas (el rol corta a los 30 s una transacción ociosa).
+- **Límites del rol:** como mucho **3 conexiones** a la vez y **5 s** por
+  consulta. Usar **una** conexión y reconectar si se corta.
+- **Qué puede hacer el usuario:** solo ejecutar las 4 funciones de abajo.
+  No puede leer ni escribir ninguna tabla, ni crear nada, ni llamar a
+  otras funciones de la app. La hora la pone el servidor.
 
-Base: `https://<dominio-de-producción>/api/easytrading`. Todas las
-respuestas son JSON con `Cache-Control: no-store`.
+Todas las funciones devuelven **jsonb** (psycopg lo entrega como `dict`).
+Los errores de datos no son excepciones: vuelven como
+`{"resultado": "datos_invalidos", "detalle": "…"}`.
 
 ---
 
@@ -42,25 +59,28 @@ pendiente ──tomar──▶ tomada ──resultado──▶ ejecutada | desca
     └── 60 s sin tomar ──▶ vencida  (NO se ejecuta nunca)
 ```
 
-- Una alerta genera como máximo **una** señal (`alerta_id` único).
+- Una alerta genera como máximo **una** señal.
 - Una señal se puede tomar **una sola vez** (atómico en la base).
-- El envío en **pausa** ("Pausar todo"): la lista viene vacía y `tomar`
-  responde 409 `pausado`. Las pendientes vencen solas a los 60 s.
+- **Pausa** ("Pausar todo" en el panel): `pendientes` devuelve la lista
+  vacía y `tomar` responde `pausado`. Las pendientes vencen solas a los 60 s.
+- Una señal **tomada sin resultado** aparece en el panel ("sin resultado
+  hace X"), en rojo después de 2 min.
 
 ---
 
-## 1. GET `/senales` — señales pendientes
+## 1. `public.easytrading_pendientes()` → señales pendientes
 
-Consultar cada **2 a 3 s**, solo en horario de mercado (11:00–17:00 de
-Argentina, o el horario configurado en el panel). Cada consulta también
-vence las señales viejas y le muestra al panel que EasyTrading está
+```sql
+select public.easytrading_pendientes();
+```
+
+Sin parámetros. Llamarla cada **2 a 3 s**, solo en horario de mercado
+(11:00–17:00 de Argentina, o el configurado en el panel). Además vence las
+señales de más de 60 s y le muestra al panel que EasyTrading está
 conectado.
-
-**200**
 
 ```json
 {
-  "ok": true,
   "envio_activado": true,
   "senales": [
     {
@@ -82,7 +102,8 @@ conectado.
 
 | Campo | Qué es |
 |---|---|
-| `id` | ID de la señal. **Guardarlo**: nunca re-ejecutar una señal ya tomada (§7 de la especificación). |
+| `envio_activado` | `false` = pausa: la lista viene vacía. |
+| `id` | ID de la señal. **Guardarlo** localmente: nunca re-ejecutar una señal ya tomada. |
 | `origen` | `tradingview` o `simulada` (botón "Simular alerta" del panel con "enviar" tildado). **En modo REAL, descartar las `simulada`** con motivo `"simulada"`. |
 | `ticker_byma` | CEDEAR sin sufijo (compatible con `Instrumento.ticker`). |
 | `estrategia` | `corto` o `intradia`. |
@@ -94,87 +115,84 @@ Ordenadas por `id` (la más vieja primero).
 
 ---
 
-## 2. POST `/senales/{id}/tomar` — tomar una señal
+## 2. `public.easytrading_tomar(p_id bigint)` → tomar una señal
 
-Sin cuerpo. **Solo si responde 200 se puede ejecutar la señal.**
+```sql
+select public.easytrading_tomar(17);
+```
 
-| Respuesta | Significado | Qué hacer |
+**Solo si devuelve `"resultado": "tomada"` se puede ejecutar la señal.**
+
+| `resultado` | Ejemplo | Qué hacer |
 |---|---|---|
-| `200 {"ok": true, "senal": {…, "estado": "tomada"}}` | Es tuya. | Decidir con tu configuración y operar. |
-| `409 {"ok": false, "error": "no_disponible", "estado": "tomada"}` | Ya la tomaste (o la tomó otra instancia). | **No ejecutar.** Si fue un reintento tuyo, revisar el ID guardado. |
-| `409 {"ok": false, "error": "no_disponible", "estado": "vencida"}` | Pasaron 60 s. | **No ejecutar.** |
-| `409 {"ok": false, "error": "pausado", "estado": "pendiente"}` | Envío en pausa. | **No ejecutar.** |
-| `404 {"ok": false, "error": "no_existe"}` | ID desconocido. | No ejecutar. |
-| `400 {"ok": false, "error": "id_invalido"}` | El ID no es un entero positivo. | Bug del cliente. |
-
-Si la respuesta no llega (timeout de red), reintentar `tomar`: si ya la
-habías tomado vas a recibir `409 no_disponible / tomada`. En ese caso,
-como no se puede saber si el primer intento fue tuyo, lo seguro es **no
-ejecutar** y reportarla como descartada con motivo `"respuesta de tomar
-perdida"`.
+| `tomada` | `{"resultado": "tomada", "senal": {…, "estado": "tomada"}}` | Es tuya: decidir con tu configuración y operar. |
+| `no_disponible` | `{"resultado": "no_disponible", "estado": "tomada"}` | Ya la tomaste (o la tomó otra instancia). **No ejecutar.** |
+| `no_disponible` | `{"resultado": "no_disponible", "estado": "vencida"}` | Pasaron 60 s. **No ejecutar.** |
+| `pausado` | `{"resultado": "pausado", "estado": "pendiente"}` | Envío en pausa. **No ejecutar.** |
+| `no_existe` | `{"resultado": "no_existe"}` | ID desconocido. No ejecutar. |
+| `datos_invalidos` | `{"resultado": "datos_invalidos", "detalle": "…"}` | `p_id` nulo o ≤ 0. Bug del cliente. |
 
 ---
 
-## 3. POST `/senales/{id}/resultado` — informar el resultado
+## 3. `public.easytrading_resultado(...)` → informar el resultado
 
-Solo para señales **tomadas**. Cuerpo JSON (máx. 10 KB), una de dos formas:
-
-```json
-{ "estado": "ejecutada", "precio_ars": 15230.5, "nominales": 10, "modo": "PAPER" }
+```sql
+select public.easytrading_resultado(
+  p_id         bigint,   -- la señal tomada
+  p_estado     text,     -- 'ejecutada' | 'descartada'
+  p_precio_ars numeric,  -- ejecutada: precio promedio en pesos (> 0); descartada: null
+  p_nominales  integer,  -- ejecutada: > 0; descartada: null
+  p_modo       text,     -- ejecutada: 'PAPER' | 'REAL'; descartada: null
+  p_motivo     text      -- descartada: 1 a 500 caracteres; ejecutada: null
+);
 ```
 
-```json
-{ "estado": "descartada", "motivo": "sin posición abierta" }
+Ejemplos:
+
+```sql
+select public.easytrading_resultado(17, 'ejecutada', 15230.5, 10, 'PAPER', null);
+select public.easytrading_resultado(18, 'descartada', null, null, null, 'sin posición abierta');
 ```
 
-| Campo | Regla |
-|---|---|
-| `precio_ars` | número > 0 (precio promedio de la orden, en pesos). |
-| `nominales` | entero > 0. |
-| `modo` | `"PAPER"` o `"REAL"`. |
-| `motivo` | texto de 1 a 500 caracteres. Ej.: `"no está en la lista de EasyTrading"`, `"estrategia apagada"`, `"sin configurar"`, `"sin posición abierta"`, `"simulada"`, `"rechazada por el broker: …"`. |
+Motivos sugeridos para `descartada`: `"no está en la lista de
+EasyTrading"`, `"estrategia apagada"`, `"sin configurar"`, `"sin
+posición abierta"`, `"simulada"`, `"rechazada por el broker: …"`.
 
-| Respuesta | Significado |
+| `resultado` | Significado |
 |---|---|
-| `200 {"ok": true, "estado": "ejecutada", "repetido": false}` | Guardado. |
-| `200 {"ok": true, …, "repetido": true}` | Ya estaba guardado **exactamente igual** (reintento seguro). |
-| `409 {"ok": false, "error": "no_disponible", "estado": "…"}` | La señal no está tomada (pendiente, vencida) o ya tiene **otro** resultado. |
-| `404` | ID desconocido. |
-| `400 {"ok": false, "error": "datos_invalidos", "detalle": {"campo": "mensaje"}}` | Cuerpo inválido. |
-| `400 {"ok": false, "error": "json_invalido"}` / `413` | No es JSON / más de 10 KB. |
+| `registrado` | Guardado. `{"resultado": "registrado", "estado": "ejecutada"}` |
+| `ya_registrado` | Ya estaba guardado **exactamente igual** (reintento seguro). |
+| `no_disponible` | La señal no está tomada (pendiente, vencida) o ya tiene **otro** resultado. Trae `estado`. |
+| `no_existe` | ID desconocido. |
+| `datos_invalidos` | Algún parámetro no cumple las reglas de arriba; `detalle` dice cuál. No se guardó nada. |
 
 La web solo guarda y muestra el resultado junto a la alerta. No calcula
 posiciones ni resultados.
 
 ---
 
-## 4. POST `/posicion-cerrada` — se cerró TODA una posición de corto
+## 4. `public.easytrading_posicion_cerrada(...)` → se cerró TODA una posición de corto
+
+```sql
+select public.easytrading_posicion_cerrada(
+  p_ticker_byma text,         -- CEDEAR sin sufijo (se pasa a mayúsculas)
+  p_estrategia  text,         -- solo 'corto'
+  p_cerrada_en  timestamptz,  -- cuándo se cerró, CON zona horaria
+  p_senal_id    bigint        -- opcional: la señal que la cerró (null si fue stop / TP / trailing)
+);
+```
 
 Cuando se cierra **toda** una posición de **corto plazo** (venta, stop,
 TP o trailing). La web destilda "activo" de ese activo en la lista de
 corto (para no volver a entrar con una alerta vieja). Intradía no se
 avisa.
 
-```json
-{
-  "ticker_byma": "AAPL",
-  "estrategia": "corto",
-  "cerrada_en": "2026-10-01T16:30:00-03:00",
-  "senal_id": 17
-}
+```sql
+select public.easytrading_posicion_cerrada('AAPL', 'corto', '2026-10-01 16:30:00-03', 17);
 ```
 
-| Campo | Regla |
-|---|---|
-| `ticker_byma` | CEDEAR sin sufijo (se pasa a mayúsculas). |
-| `estrategia` | solo `"corto"`. |
-| `cerrada_en` | fecha y hora ISO 8601 **con zona horaria** (`Z` o `-03:00`). Junto con el ticker identifica el aviso: reenviar el mismo aviso no hace nada. |
-| `senal_id` | opcional: la señal que cerró la posición (`null` si fue stop / TP / trailing local). |
-
-**200** siempre que el pedido sea válido:
-
 ```json
-{ "ok": true, "resultado": "destildado", "repetido": false }
+{ "resultado": "destildado", "repetido": false }
 ```
 
 | `resultado` | Significado |
@@ -183,40 +201,124 @@ avisa.
 | `ya_destildado` | Ya estaba destildado. |
 | `no_esta_en_la_lista` | El CEDEAR existe en Tickers pero no está en la lista de corto. |
 | `ticker_desconocido` | El CEDEAR no está en Tickers. |
+| `datos_invalidos` | Ticker mal formado, estrategia que no es `corto`, sin `p_cerrada_en` o con fecha más de 5 min en el futuro. No se toca nada. |
 
-`repetido: true` = ese mismo aviso (ticker + `cerrada_en`) ya había
+`repetido: true` = ese mismo aviso (ticker + `p_cerrada_en`) ya había
 llegado; no se vuelve a destildar (por si Fran lo tildó de nuevo).
+**Mandar siempre la misma `p_cerrada_en` para el mismo cierre**: es lo que
+hace seguro reintentar.
 
 ---
 
-## Errores comunes a todos
+## Reintentos
 
-| HTTP | Qué hacer |
-|---|---|
-| 401 | Token mal configurado en EasyTrading. No reintentar en loop. |
-| 500 / 502 / timeout | Reintentar con espera (1 s, 2 s, 4 s…). `tomar`, `resultado` y `posicion-cerrada` son seguros de reintentar. |
+Si la conexión se corta o una llamada falla con excepción (red, timeout,
+Supabase caído): reconectar con espera creciente (1 s, 2 s, 4 s… hasta
+30 s) y reintentar según esta tabla.
+
+| Función | ¿Reintentar es seguro? | Detalle |
+|---|---|---|
+| `easytrading_pendientes` | Sí | Solo lee (y anota la hora). |
+| `easytrading_tomar` | Sí, pero… | Si la primera llamada se cortó sin respuesta, el reintento puede devolver `no_disponible / tomada` sin que sepas si la tomaste vos. En ese caso **no ejecutar** y reportarla `descartada` con motivo `"respuesta de tomar perdida"` (queda a la vista en el panel). |
+| `easytrading_resultado` | Sí | El mismo resultado repetido devuelve `ya_registrado`. Reintentar hasta obtener `registrado`, `ya_registrado` o `no_disponible`. Guardar en la PC los resultados pendientes de informar, para no perderlos si EasyTrading se reinicia. |
+| `easytrading_posicion_cerrada` | Sí | Con la misma `p_cerrada_en` devuelve `repetido: true`. |
+
+Un `datos_invalidos` no se reintenta: es un error del cliente.
 
 ---
 
-## Ejemplo de ciclo (pseudocódigo)
+## Ejemplo mínimo en Python (psycopg 3)
 
+```python
+"""Módulo puente mínimo (F4). Requiere: pip install "psycopg[binary]"
+
+EASYTRADING_DB_URL (variable de entorno de la PC):
+postgresql://easytrading_bot.<project_ref>:<contraseña>@<host-del-pooler>:5432/postgres?sslmode=require
+"""
+import os
+import time
+from decimal import Decimal
+
+import psycopg
+
+DSN = os.environ["EASYTRADING_DB_URL"]
+
+
+def conectar() -> psycopg.Connection:
+    return psycopg.connect(DSN, autocommit=True, connect_timeout=10, application_name="easytrading")
+
+
+def llamar(conn: psycopg.Connection, sql: str, params: tuple = ()) -> dict:
+    """Ejecuta una función de entrada y devuelve su jsonb como dict."""
+    return conn.execute(sql, params).fetchone()[0]
+
+
+def ciclo(conn: psycopg.Connection, ya_tomadas: set[int]) -> None:
+    r = llamar(conn, "select public.easytrading_pendientes()")
+    for s in r["senales"]:  # la más vieja primero
+        if s["id"] in ya_tomadas:
+            continue
+        t = llamar(conn, "select public.easytrading_tomar(%s::bigint)", (s["id"],))
+        if t["resultado"] != "tomada":
+            continue  # tomada por otro, vencida o en pausa: NO ejecutar
+        ya_tomadas.add(s["id"])  # en la versión real: guardarlo en disco ANTES de operar
+
+        # Acá EasyTrading decide con SU configuración y opera (PAPER en F4).
+        nominales, precio = 10, Decimal("15230.50")
+
+        llamar(
+            conn,
+            "select public.easytrading_resultado(%s::bigint, %s::text, %s::numeric, %s::integer, %s::text, %s::text)",
+            (s["id"], "ejecutada", precio, nominales, "PAPER", None),
+        )
+        # Para descartar: (s["id"], "descartada", None, None, None, "sin posición abierta")
+
+
+def main() -> None:
+    ya_tomadas: set[int] = set()
+    espera = 1
+    conn = None
+    while True:
+        try:
+            if conn is None or conn.closed:
+                conn = conectar()
+            ciclo(conn, ya_tomadas)
+            espera = 1
+            time.sleep(3)
+        except psycopg.OperationalError as e:
+            print("Sin conexión con Supabase:", e)
+            if conn is not None:
+                conn.close()
+            conn = None
+            time.sleep(espera)
+            espera = min(espera * 2, 30)
+
+
+if __name__ == "__main__":
+    main()
 ```
-cada 2 s, en horario:
-  r = GET /senales
-  para cada s en r.senales (la más vieja primero):
-    si s.id ya está en mi registro local: continuar
-    t = POST /senales/{s.id}/tomar
-    si t.status != 200: continuar          # NO ejecutar
-    guardar s.id en el registro local       # antes de operar
-    resultado = decidir_y_operar(t.senal)   # con la config de EasyTrading
-    POST /senales/{s.id}/resultado (reintentar hasta 200 / 409)
-    si cerró toda una posición de corto:
-      POST /posicion-cerrada
+
+- Los `::bigint`, `::numeric`, etc. evitan ambigüedades de tipos al pasar
+  parámetros desde Python.
+- `p_precio_ars` con `Decimal` (no `float`) para no perder centavos.
+- `p_cerrada_en` con un `datetime` **con zona horaria** (`datetime.now(timezone.utc)`):
+  ```python
+  llamar(conn, "select public.easytrading_posicion_cerrada(%s::text, 'corto', %s::timestamptz, %s::bigint)",
+         ("AAPL", cerrada_en, senal_id))
+  ```
+
+## Probar la conexión a mano (psql)
+
+```powershell
+psql "postgresql://easytrading_bot.<project_ref>@<host-del-pooler>:5432/postgres?sslmode=require" -c "select public.easytrading_pendientes();"
 ```
 
-## Límites del plan gratuito
+(psql pide la contraseña.) Tiene que devolver `{"senales": [], "envio_activado": false}`
+o similar. Un `select * from public.alertas;` tiene que fallar con
+*permission denied*.
 
-Consultar cada 2 s durante 6 h de mercado son ~10.800 pedidos por día
-(~240.000 por mes). Debería entrar en el plan Hobby de Vercel, pero hay
-que mirar **Vercel → Usage** la primera semana de F4. No consultar fuera
-del horario de mercado ni más seguido que cada 1 s.
+## Consumo
+
+Una consulta cada 3 s durante 6 h de mercado son ~7.200 llamadas por día:
+no pasa por Vercel, y para Postgres son consultas mínimas. Igual, no
+consultar fuera del horario de mercado ni más seguido que cada 1 s.
