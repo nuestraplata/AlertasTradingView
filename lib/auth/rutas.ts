@@ -3,12 +3,12 @@ export const RUTA_INICIO = "/";
 
 /**
  * Rutas que no exigen sesión. Las /api públicas tienen su propia
- * autenticación (clave del webhook, token de EasyTrading).
+ * autenticación (clave del webhook, secreto del cron). EasyTrading no usa
+ * HTTP: se conecta directo a Postgres con su propio rol (migración 5).
  */
 const PREFIJOS_PUBLICOS = [
   RUTA_LOGIN,
   "/api/webhook", // F2: TradingView (valida "clave")
-  "/api/easytrading", // F3: EasyTrading (valida token propio)
   "/api/cron", // Vercel Cron (valida CRON_SECRET; no sigue redirecciones)
 ];
 
