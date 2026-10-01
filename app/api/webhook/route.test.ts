@@ -1,8 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Base falsa: registra qué se insertó en cada tabla.
+// Base falsa: registra qué se insertó en cada tabla y qué funciones se
+// llamaron. Las reglas del filtro se prueban contra Postgres real en
+// supabase/tests/senales.test.ts.
 const inserts: { tabla: string; fila: Record<string, unknown> }[] = [];
+const rpcs: { funcion: string; args: Record<string, unknown> }[] = [];
 let fallarInsert = false;
+let respuestaFiltro: Record<string, unknown> = { alerta_id: 42, estado: "senal", motivo: null, senal_id: 9 };
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/supabase/admin", () => ({
@@ -15,10 +19,14 @@ vi.mock("@/lib/supabase/admin", () => ({
         return {
           ...res,
           then: (ok: (v: unknown) => unknown) => Promise.resolve(res).then(ok),
-          select: () => ({ single: async () => ({ data: error ? null : { id: 42 }, error }) }),
         };
       },
     }),
+    rpc: async (funcion: string, args: Record<string, unknown>) => {
+      if (fallarInsert) return { data: null, error: { code: "XX000", message: "caída" } };
+      rpcs.push({ funcion, args });
+      return { data: respuestaFiltro, error: null };
+    },
   }),
 }));
 
@@ -37,7 +45,9 @@ function pedido(cuerpo: unknown, headers: Record<string, string> = {}) {
 
 beforeEach(() => {
   inserts.length = 0;
+  rpcs.length = 0;
   fallarInsert = false;
+  respuestaFiltro = { alerta_id: 42, estado: "senal", motivo: null, senal_id: 9 };
   vi.stubEnv("WEBHOOK_CLAVE", CLAVE);
   vi.stubEnv("VERCEL_ENV", "");
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -48,14 +58,33 @@ afterEach(() => {
 });
 
 describe("POST /api/webhook", () => {
-  it("alerta válida → 200, guardada como recibida y sin la clave", async () => {
+  it("alerta válida → pasa por el filtro de señales, 200 y sin la clave", async () => {
     const r = await POST(pedido(mensaje));
     expect(r.status).toBe(200);
-    expect(await r.json()).toEqual({ ok: true, id: 42, estado: "recibida" });
-    expect(inserts).toHaveLength(1);
-    expect(inserts[0].tabla).toBe("alertas");
-    expect(inserts[0].fila).toMatchObject({ ticker: "AAPL", origen: "tradingview", estado: "recibida" });
-    expect(JSON.stringify(inserts)).not.toContain(CLAVE);
+    expect(await r.json()).toEqual({ ok: true, id: 42, estado: "senal" });
+    expect(inserts).toHaveLength(0);
+    expect(rpcs).toHaveLength(1);
+    expect(rpcs[0]).toMatchObject({
+      funcion: "registrar_alerta",
+      args: {
+        p_origen: "tradingview",
+        p_ticker: "AAPL",
+        p_estrategia: "corto",
+        p_accion: "compra",
+        p_precio_usd: 185.5,
+        p_motivo: null,
+        p_enviar_simulada: false,
+      },
+    });
+    expect(rpcs[0].args).not.toHaveProperty("p_ahora"); // la hora la pone la base
+    expect(JSON.stringify(rpcs)).not.toContain(CLAVE);
+  });
+
+  it("el filtro la descarta → 200 igual (TradingView no tiene que reintentar)", async () => {
+    respuestaFiltro = { alerta_id: 43, estado: "descartada", motivo: "pausado", senal_id: null };
+    const r = await POST(pedido(mensaje));
+    expect(r.status).toBe(200);
+    expect(await r.json()).toEqual({ ok: true, id: 43, estado: "descartada" });
   });
 
   it("acepta application/json igual que text/plain", async () => {
@@ -63,11 +92,12 @@ describe("POST /api/webhook", () => {
     expect(r.status).toBe(200);
   });
 
-  it("datos inválidos con clave correcta → 200, guardada como descartada", async () => {
+  it("datos inválidos con clave correcta → se guarda con el motivo, sin filtrar", async () => {
+    respuestaFiltro = { alerta_id: 44, estado: "descartada", motivo: "x", senal_id: null };
     const r = await POST(pedido({ ...mensaje, accion: "sl" }));
     expect(r.status).toBe(200);
     expect(await r.json()).toMatchObject({ ok: true, estado: "descartada" });
-    expect(inserts[0].fila).toMatchObject({ estado: "descartada" });
+    expect(rpcs[0].args).toMatchObject({ p_accion: null, p_motivo: expect.stringMatching(/"accion" inválida/) });
   });
 
   it("clave mala → 401, solo intento con IP, sin payload, sin detalles en la respuesta", async () => {
@@ -109,6 +139,7 @@ describe("POST /api/webhook", () => {
     const r = await POST(pedido(mensaje));
     expect(r.status).toBe(500);
     expect(inserts).toHaveLength(0);
+    expect(rpcs).toHaveLength(0);
   });
 
   it("la base falla al guardar la alerta → 500", async () => {

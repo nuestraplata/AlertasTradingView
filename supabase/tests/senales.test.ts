@@ -1,5 +1,6 @@
 import type { PGlite } from "@electric-sql/pglite";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { MOTIVO_SIMULADA_NO_ENVIADA } from "@/lib/alertas/registrar";
 import { baseConMigraciones, codigoDeError, comoRol } from "./base";
 
 // Migración 4 (F3) contra Postgres real: filtro de señales, API de
@@ -212,7 +213,7 @@ describe("registrar_alerta: filtro de señales", () => {
   it("simulada: si no se pide enviar, pasa el filtro pero NO genera señal", async () => {
     expect(await registrar({ origen: "simulada" })).toMatchObject({
       estado: "descartada",
-      motivo: "Simulada: pasó el filtro, pero no se envió a EasyTrading.",
+      motivo: MOTIVO_SIMULADA_NO_ENVIADA,
       senal_id: null,
     });
   });

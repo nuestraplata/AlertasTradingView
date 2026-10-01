@@ -7,8 +7,10 @@ import { validarSecreto } from "@/lib/supabase/env";
 /**
  * Webhook de TradingView (docs/ESPECIFICACION.md §4). Público: se
  * autentica con el campo "clave" del mensaje y, en producción, con las IPs
- * de TradingView. Registra la alerta y responde enseguida (TradingView
- * corta a los 3 s). En F2 no genera señales.
+ * de TradingView. Registra la alerta, la pasa por el filtro de señales
+ * (§6; si pasa, queda una señal pendiente para EasyTrading) y responde
+ * enseguida (TradingView corta a los 3 s). Responde 200 aunque el filtro
+ * la descarte: la alerta llegó bien y no hay que reintentar.
  */
 export async function POST(request: Request) {
   let claveEsperada: string;
