@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { AvisosEasyTrading, type AvisoFila } from "@/components/alertas/AvisosEasyTrading";
 import { BotonActualizar } from "@/components/alertas/BotonActualizar";
 import { Filtros } from "@/components/alertas/Filtros";
 import { IntentosRechazados, type IntentoFila } from "@/components/alertas/IntentosRechazados";
@@ -27,7 +28,8 @@ export default async function AlertasPage({ searchParams }: PageProps<"/alertas"
   if (filtros.origen) consulta = consulta.eq("origen", filtros.origen);
 
   const hace24h = new Date(ahora.getTime() - 24 * 60 * 60 * 1000).toISOString();
-  const [alertas, intentos, tickers] = await Promise.all([
+  const hace7d = new Date(ahora.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const [alertas, intentos, tickers, avisos] = await Promise.all([
     consulta,
     supabase
       .from("intentos_rechazados")
@@ -36,15 +38,21 @@ export default async function AlertasPage({ searchParams }: PageProps<"/alertas"
       .order("id", { ascending: false })
       .limit(50),
     supabase.from("tickers").select("ticker_usa").order("ticker_usa"),
+    supabase
+      .from("avisos_easytrading")
+      .select("id, recibido_en, ticker_byma, ticker_usa, cerrada_en, senal_id, resultado")
+      .gte("recibido_en", hace7d)
+      .order("id", { ascending: false })
+      .limit(50),
   ]);
 
-  const error = alertas.error ?? intentos.error ?? tickers.error;
+  const error = alertas.error ?? intentos.error ?? tickers.error ?? avisos.error;
   if (error) {
     console.error("[alertas] carga", error);
     return <p role="alert">❌ No se pudieron cargar las alertas: {traducirErrorDb(error)}</p>;
   }
 
-  const filas = (alertas.data ?? []) as AlertaFila[];
+  const filas = (alertas.data ?? []) as unknown as AlertaFila[];
   const total = alertas.count ?? filas.length;
   const hayMas = filas.length < total && filtros.limite < LIMITE_MAX;
 
@@ -54,11 +62,6 @@ export default async function AlertasPage({ searchParams }: PageProps<"/alertas"
         <h1 className="text-xl font-semibold">Alertas</h1>
         <BotonActualizar />
       </div>
-
-      {/* Se saca en F3, cuando el filtro de señales esté activo. */}
-      <p className="rounded border border-sky-600/40 bg-sky-600/10 px-3 py-2 text-sm">
-        F2: las alertas solo se registran; todavía no se generan señales.
-      </p>
 
       <SimularAlerta tickers={(tickers.data ?? []).map((t) => t.ticker_usa as string)} />
 
@@ -104,6 +107,7 @@ export default async function AlertasPage({ searchParams }: PageProps<"/alertas"
       )}
 
       <IntentosRechazados intentos={(intentos.data ?? []) as IntentoFila[]} ahora={ahora} />
+      <AvisosEasyTrading avisos={(avisos.data ?? []) as AvisoFila[]} ahora={ahora} />
     </div>
   );
 }

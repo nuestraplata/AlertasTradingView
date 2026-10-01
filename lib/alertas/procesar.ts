@@ -25,6 +25,11 @@ export type AlertaNueva = {
   accion: Accion | null;
   precio_usd: number | null;
   hora_tv: string | null;
+  /**
+   * Resultado de validar los datos: "recibida" = datos válidos, pasa al
+   * filtro de señales de la base (que decide el estado final: "senal" o
+   * "descartada"); "descartada" = datos inválidos, se guarda con motivo.
+   */
   estado: "recibida" | "descartada";
   motivo: string | null;
 };

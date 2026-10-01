@@ -22,6 +22,8 @@ const POR_RESTRICCION: Record<string, (valor: string | null) => string> = {
     "El ticker se usa en alguna lista (corto o intradía), o no existe en Tickers.",
   activos_ticker_estrategia_unico: () => "Ese ticker ya está en esta lista.",
   activos_tilde_segun_estrategia: () => "El tilde no corresponde a esta lista.",
+  feriados_pkey: (v) => `Ya hay un feriado cargado${v ? ` el ${v}` : " ese día"}.`,
+  configuracion_horario_valido: () => "El cierre tiene que ser después de la apertura.",
 };
 
 /** Nombre de la restricción que aparece entre comillas en el mensaje de Postgres. */
