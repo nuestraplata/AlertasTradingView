@@ -54,8 +54,11 @@ export function describirSenal(s: SenalFila, ahora: Date): VistaSenal {
     case "tomada":
       return {
         etiqueta: `Señal ${s.ticker_byma} tomada`,
-        detalle: "EasyTrading todavía no informó el resultado",
-        tono: "espera",
+        detalle: s.tomada_en
+          ? `Sin resultado hace ${haceCuanto(s.tomada_en, ahora)}`
+          : "EasyTrading todavía no informó el resultado",
+        // Más de 2 min sin resultado: EasyTrading pudo caerse después de tomarla.
+        tono: s.tomada_en && demora(s.tomada_en, ahora) > DEMORA_PREOCUPANTE_MS ? "error" : "espera",
       };
     case "ejecutada": {
       const nominales = s.resultado_nominales ?? 0;
@@ -73,6 +76,25 @@ export function describirSenal(s: SenalFila, ahora: Date): VistaSenal {
         tono: "error",
       };
   }
+}
+
+/** Tomada hace más de esto sin resultado: se marca en rojo. */
+export const DEMORA_PREOCUPANTE_MS = 2 * 60_000;
+
+function demora(desde: string, ahora: Date): number {
+  return ahora.getTime() - new Date(desde).getTime();
+}
+
+/** Tiempo transcurrido, corto: "45 s", "3 min 5 s", "2 h 10 min", "3 d 4 h". */
+export function haceCuanto(desde: string, ahora: Date): string {
+  const s = Math.max(0, Math.floor(demora(desde, ahora) / 1000));
+  if (s < 60) return `${s} s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return s % 60 ? `${m} min ${s % 60} s` : `${m} min`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return m % 60 ? `${h} h ${m % 60} min` : `${h} h`;
+  const d = Math.floor(h / 24);
+  return h % 24 ? `${d} d ${h % 24} h` : `${d} d`;
 }
 
 function vencida(s: SenalFila): VistaSenal {

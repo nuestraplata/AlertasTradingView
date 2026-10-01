@@ -5,6 +5,7 @@ import { BotonActualizar } from "@/components/alertas/BotonActualizar";
 import { Filtros } from "@/components/alertas/Filtros";
 import { IntentosRechazados, type IntentoFila } from "@/components/alertas/IntentosRechazados";
 import { COLUMNAS_ALERTA, ListaAlertas, type AlertaFila } from "@/components/alertas/ListaAlertas";
+import { COLUMNAS_TOMADA, SenalesSinResultado, type TomadaFila } from "@/components/alertas/SenalesSinResultado";
 import { SimularAlerta } from "@/components/alertas/SimularAlerta";
 import { LIMITE_MAX, PASO, hayFiltros, leerFiltros, urlAlertas } from "@/lib/alertas/filtros";
 import { clienteConSesion } from "@/lib/auth/sesion";
@@ -29,7 +30,7 @@ export default async function AlertasPage({ searchParams }: PageProps<"/alertas"
 
   const hace24h = new Date(ahora.getTime() - 24 * 60 * 60 * 1000).toISOString();
   const hace7d = new Date(ahora.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
-  const [alertas, intentos, tickers, avisos] = await Promise.all([
+  const [alertas, intentos, tickers, avisos, tomadas] = await Promise.all([
     consulta,
     supabase
       .from("intentos_rechazados")
@@ -44,9 +45,15 @@ export default async function AlertasPage({ searchParams }: PageProps<"/alertas"
       .gte("recibido_en", hace7d)
       .order("id", { ascending: false })
       .limit(50),
+    supabase
+      .from("senales")
+      .select(COLUMNAS_TOMADA)
+      .eq("estado", "tomada")
+      .order("tomada_en")
+      .limit(50),
   ]);
 
-  const error = alertas.error ?? intentos.error ?? tickers.error ?? avisos.error;
+  const error = alertas.error ?? intentos.error ?? tickers.error ?? avisos.error ?? tomadas.error;
   if (error) {
     console.error("[alertas] carga", error);
     return <p role="alert">❌ No se pudieron cargar las alertas: {traducirErrorDb(error)}</p>;
@@ -62,6 +69,8 @@ export default async function AlertasPage({ searchParams }: PageProps<"/alertas"
         <h1 className="text-xl font-semibold">Alertas</h1>
         <BotonActualizar />
       </div>
+
+      <SenalesSinResultado senales={(tomadas.data ?? []) as TomadaFila[]} ahora={ahora} />
 
       <SimularAlerta tickers={(tickers.data ?? []).map((t) => t.ticker_usa as string)} />
 

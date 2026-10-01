@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { conexionEasyTrading, describirSenal, formatearArs, type SenalFila } from "./estado";
+import { conexionEasyTrading, describirSenal, formatearArs, haceCuanto, type SenalFila } from "./estado";
 
 const AHORA = new Date("2026-10-01T17:00:30Z");
 const base: SenalFila = {
@@ -36,10 +36,18 @@ describe("describirSenal", () => {
     expect(describirSenal({ ...base, estado: "vencida" }, AHORA).detalle).toMatch(/no la tomó en 60 s/);
   });
 
-  it("tomada sin resultado", () => {
-    expect(describirSenal({ ...base, estado: "tomada", tomada_en: "x" }, AHORA)).toMatchObject({
+  it("tomada sin resultado: cuánto hace", () => {
+    expect(describirSenal({ ...base, estado: "tomada", tomada_en: "2026-10-01T17:00:00Z" }, AHORA)).toEqual({
       etiqueta: "Señal AAPL tomada",
+      detalle: "Sin resultado hace 30 s",
       tono: "espera",
+    });
+  });
+
+  it("tomada sin resultado hace más de 2 min → en rojo", () => {
+    expect(describirSenal({ ...base, estado: "tomada", tomada_en: "2026-10-01T16:58:29Z" }, AHORA)).toMatchObject({
+      detalle: "Sin resultado hace 2 min 1 s",
+      tono: "error",
     });
   });
 
@@ -78,4 +86,24 @@ describe("conexionEasyTrading", () => {
     expect(conexionEasyTrading("2026-10-01T17:00:00Z", AHORA)).toBe("conectado"));
   it("consultó hace 31 s → sin conexión", () =>
     expect(conexionEasyTrading("2026-10-01T16:59:59Z", AHORA)).toBe("sin_conexion"));
+});
+
+describe("haceCuanto", () => {
+  const desde = (segundos: number) => new Date(AHORA.getTime() - segundos * 1000).toISOString();
+  it.each([
+    [0, "0 s"],
+    [59, "59 s"],
+    [60, "1 min"],
+    [125, "2 min 5 s"],
+    [3600, "1 h"],
+    [3600 * 2 + 600, "2 h 10 min"],
+    [86400 * 3 + 3600 * 4, "3 d 4 h"],
+    [86400, "1 d"],
+  ])("%i s → %s", (segundos, texto) => {
+    expect(haceCuanto(desde(segundos), AHORA)).toBe(texto);
+  });
+
+  it("una hora futura (relojes desfasados) no da negativo", () => {
+    expect(haceCuanto(desde(-5), AHORA)).toBe("0 s");
+  });
 });

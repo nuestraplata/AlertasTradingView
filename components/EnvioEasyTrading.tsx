@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useTransition } from "react";
 import { cambiarEnvio } from "@/app/(panel)/actions";
 import { useAviso } from "@/components/Avisos";
@@ -11,6 +12,8 @@ type Props = {
   conexion: "conectado" | "sin_conexion" | "nunca";
   /** Hora de la última consulta de EasyTrading, ya formateada. */
   vistoEn: string | null;
+  /** Si hay señales tomadas sin resultado: hace cuánto se tomó la más vieja. */
+  sinResultadoHace: string | null;
 };
 
 /**
@@ -18,7 +21,7 @@ type Props = {
  * pantallas (docs/ESPECIFICACION.md §10, F3). Pausar es inmediato;
  * activar pide confirmación.
  */
-export function EnvioEasyTrading({ activado, cambiadoEn, conexion, vistoEn }: Props) {
+export function EnvioEasyTrading({ activado, cambiadoEn, conexion, vistoEn, sinResultadoHace }: Props) {
   const avisar = useAviso();
   const [cambiando, startTransition] = useTransition();
 
@@ -81,6 +84,12 @@ export function EnvioEasyTrading({ activado, cambiadoEn, conexion, vistoEn }: Pr
         <span className="text-xs opacity-80">
           Las alertas se siguen guardando, descartadas con motivo “pausado”.
         </span>
+      )}
+
+      {sinResultadoHace && (
+        <Link href="/alertas#sin-resultado" className="text-xs font-medium text-red-700 underline dark:text-red-400">
+          ⚠ Señal tomada sin resultado hace {sinResultadoHace}
+        </Link>
       )}
 
       <span className="ml-auto flex items-center gap-2 text-xs opacity-80">

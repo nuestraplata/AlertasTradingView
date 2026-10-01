@@ -3,7 +3,7 @@ import { EnvioEasyTrading } from "@/components/EnvioEasyTrading";
 import { Navegacion } from "@/components/Navegacion";
 import { clienteConSesion } from "@/lib/auth/sesion";
 import { formatearMomentoAR } from "@/lib/fechas";
-import { conexionEasyTrading } from "@/lib/senales/estado";
+import { conexionEasyTrading, haceCuanto } from "@/lib/senales/estado";
 import { cerrarSesion } from "./actions";
 
 /**
@@ -15,12 +15,18 @@ export default async function PanelLayout({ children }: LayoutProps<"/">) {
   const email = typeof claims.email === "string" ? claims.email : "";
 
   // Interruptor de envío: en todas las pantallas.
-  const { data: conf, error } = await supabase
-    .from("configuracion")
-    .select("envio_activado, envio_cambiado_en, easytrading_visto_en")
-    .eq("id", 1)
-    .maybeSingle();
+  const [{ data: conf, error }, tomadas] = await Promise.all([
+    supabase
+      .from("configuracion")
+      .select("envio_activado, envio_cambiado_en, easytrading_visto_en")
+      .eq("id", 1)
+      .maybeSingle(),
+    // Tomadas sin resultado: si EasyTrading se cae después de tomar una.
+    supabase.from("senales").select("tomada_en").eq("estado", "tomada").order("tomada_en").limit(1),
+  ]);
   if (error) console.error("[layout] configuración", error.code, error.message);
+  if (tomadas.error) console.error("[layout] tomadas", tomadas.error.code, tomadas.error.message);
+  const tomadaMasVieja = (tomadas.data?.[0]?.tomada_en as string | undefined) ?? null;
   const ahora = new Date();
 
   return (
@@ -48,6 +54,12 @@ export default async function PanelLayout({ children }: LayoutProps<"/">) {
           cambiadoEn={formatearMomentoAR(conf.envio_cambiado_en, ahora)}
           conexion={conexionEasyTrading(conf.easytrading_visto_en, ahora)}
           vistoEn={conf.easytrading_visto_en ? formatearMomentoAR(conf.easytrading_visto_en, ahora) : null}
+          sinResultadoHace={
+            // Una recién tomada es normal; se avisa si pasó más de 1 min.
+            tomadaMasVieja && ahora.getTime() - new Date(tomadaMasVieja).getTime() > 60_000
+              ? haceCuanto(tomadaMasVieja, ahora)
+              : null
+          }
         />
       ) : (
         <p role="alert" className="border-b border-red-600/40 bg-red-600/10 px-4 py-2 text-sm sm:px-6">
