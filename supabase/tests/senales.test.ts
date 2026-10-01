@@ -3,9 +3,11 @@ import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { MOTIVO_SIMULADA_NO_ENVIADA } from "@/lib/alertas/registrar";
 import { baseConMigraciones, codigoDeError, comoRol } from "./base";
 
-// Migración 4 (F3) contra Postgres real: filtro de señales, API de
-// EasyTrading y permisos por rol. Todo se llama como service_role, igual
-// que el servidor.
+// Migraciones 4 y 5 (F3) contra Postgres real: filtro de señales y la
+// lógica de EasyTrading (versiones internas con p_ahora, para fijar la
+// hora). registrar_alerta se llama como service_role, igual que el
+// servidor; las internas, como su dueño (igual que las funciones de
+// entrada). Los permisos de easytrading_bot están en easytrading_bot.test.ts.
 
 let db: PGlite;
 
@@ -28,7 +30,9 @@ type Registro = { alerta_id: number; estado: string; motivo: string | null; sena
 
 async function rpc<T>(funcion: string, args: unknown[]): Promise<T> {
   const marcas = args.map((_, i) => `$${i + 1}`).join(", ");
-  const [fila] = await comoRol<{ r: T }>(db, "service_role", `select public.${funcion}(${marcas}) as r`, args);
+  const rol = funcion.startsWith("interno.") ? "postgres" : "service_role";
+  const nombre = funcion.includes(".") ? funcion : `public.${funcion}`;
+  const [fila] = await comoRol<{ r: T }>(db, rol, `select ${nombre}(${marcas}) as r`, args);
   return fila.r;
 }
 
@@ -48,19 +52,19 @@ function registrar(a: Alerta = {}): Promise<Registro> {
 }
 
 const tomar = (id: number, ahora = JUEVES_14) =>
-  rpc<Record<string, unknown>>("easytrading_tomar", [id, ahora]);
+  rpc<Record<string, unknown>>("interno.tomar", [id, ahora]);
 const pendientes = (ahora = JUEVES_14) =>
-  rpc<{ envio_activado: boolean; senales: Record<string, unknown>[] }>("easytrading_pendientes", [ahora]);
+  rpc<{ envio_activado: boolean; senales: Record<string, unknown>[] }>("interno.pendientes", [ahora]);
 const resultado = (
   id: number,
   r: { estado: string; precio?: number; nominales?: number; modo?: string; motivo?: string },
   ahora = mas(JUEVES_14, 5),
 ) =>
-  rpc<Record<string, unknown>>("easytrading_resultado", [
+  rpc<Record<string, unknown>>("interno.resultado", [
     id, r.estado, r.precio ?? null, r.nominales ?? null, r.modo ?? null, r.motivo ?? null, ahora,
   ]);
 const posicionCerrada = (ticker: string, cerradaEn: string, senalId: number | null = null) =>
-  rpc<{ resultado: string; repetido: boolean }>("easytrading_posicion_cerrada", [ticker, cerradaEn, senalId, mas(cerradaEn, 1)]);
+  rpc<{ resultado: string; repetido: boolean }>("interno.posicion_cerrada", [ticker, cerradaEn, senalId, mas(cerradaEn, 1)]);
 
 async function senal(id: number) {
   const [s] = await comoRol<Record<string, unknown>>(db, "postgres", "select * from public.senales where id = $1", [id]);
@@ -161,6 +165,23 @@ describe("registrar_alerta: filtro de señales", () => {
     expect(await registrar({ ticker: "MELI", estrategia: "intradia" })).toMatchObject({ estado: "senal" });
   });
 
+  it("una simulada no bloquea a una real igual (migración 5)", async () => {
+    await registrar({ origen: "simulada" });
+    expect(await registrar({ ahora: mas(JUEVES_14, 5) })).toMatchObject({ estado: "senal" });
+  });
+
+  it("una real sí bloquea a una simulada igual, y una simulada a otra simulada", async () => {
+    const real = await registrar();
+    expect(await registrar({ origen: "simulada", enviarSimulada: true, ahora: mas(JUEVES_14, 5) })).toMatchObject({
+      estado: "descartada",
+      motivo: `Duplicada: igual a la alerta #${real.alerta_id} (menos de 30 s).`,
+    });
+    const otra = await registrar({ ticker: "KO", accion: "venta", origen: "simulada" });
+    expect(await registrar({ ticker: "KO", accion: "venta", origen: "simulada", ahora: mas(JUEVES_14, 5) })).toMatchObject({
+      motivo: `Duplicada: igual a la alerta #${otra.alerta_id} (menos de 30 s).`,
+    });
+  });
+
   it("una alerta con datos inválidos no cuenta para duplicadas", async () => {
     await registrar({ precio: null, motivo: '"precio" inválido.' });
     expect(await registrar()).toMatchObject({ estado: "senal" });
@@ -237,7 +258,7 @@ describe("registrar_alerta: filtro de señales", () => {
   });
 });
 
-describe("API de EasyTrading", () => {
+describe("lógica de EasyTrading (versiones internas)", () => {
   it("pendientes: devuelve las vigentes y anota la última consulta", async () => {
     const r = await registrar();
     const p = await pendientes(mas(JUEVES_14, 10));
@@ -352,21 +373,42 @@ describe("API de EasyTrading", () => {
 });
 
 describe("permisos", () => {
-  const FUNCIONES = [
-    "select public.registrar_alerta('tradingview', '{}', null, null, null, null, null, 'x')",
+  const ENTRADA = [
     "select public.easytrading_pendientes()",
     "select public.easytrading_tomar(1)",
     "select public.easytrading_resultado(1, 'descartada', null, null, null, 'x')",
-    "select public.easytrading_posicion_cerrada('AAPL', now(), null)",
+    "select public.easytrading_posicion_cerrada('AAPL', 'corto', now(), null)",
   ];
+  const INTERNAS = [
+    "select interno.pendientes(now())",
+    "select interno.tomar(1, now())",
+    "select interno.resultado(1, 'descartada', null, null, null, 'x', now())",
+    "select interno.posicion_cerrada('AAPL', now(), null, now())",
+  ];
+  const REGISTRAR = "select public.registrar_alerta('tradingview', '{}', null, null, null, null, null, 'x')";
 
-  it.each(FUNCIONES)("anon y authenticated no pueden llamar %s", async (sql) => {
-    expect(await codigoDeError(comoRol(db, "anon", sql))).toBe("42501");
-    expect(await codigoDeError(comoRol(db, "authenticated", sql))).toBe("42501");
+  it.each([...ENTRADA, ...INTERNAS])("anon, authenticated y service_role no pueden llamar %s", async (sql) => {
+    for (const rol of ["anon", "authenticated", "service_role"] as const) {
+      expect(await codigoDeError(comoRol(db, rol, sql))).toBe("42501");
+    }
   });
 
-  it("service_role puede llamarlas todas", async () => {
-    for (const sql of FUNCIONES) await comoRol(db, "service_role", sql);
+  it("registrar_alerta: solo service_role (el webhook)", async () => {
+    await comoRol(db, "service_role", REGISTRAR);
+    expect(await codigoDeError(comoRol(db, "anon", REGISTRAR))).toBe("42501");
+    expect(await codigoDeError(comoRol(db, "authenticated", REGISTRAR))).toBe("42501");
+  });
+
+  it("service_role ya no puede tocar señales, avisos ni tildes (era de la API HTTP)", async () => {
+    const r = await registrar();
+    expect(
+      await codigoDeError(comoRol(db, "service_role", `update public.senales set estado = 'tomada' where id = ${r.senal_id}`)),
+    ).toBe("42501");
+    expect(await codigoDeError(comoRol(db, "service_role", "select * from public.avisos_easytrading"))).toBe("42501");
+    expect(await codigoDeError(comoRol(db, "service_role", "update public.activos set activo = false"))).toBe("42501");
+    expect(
+      await codigoDeError(comoRol(db, "service_role", "update public.configuracion set easytrading_visto_en = now()")),
+    ).toBe("42501");
   });
 
   it("anon no lee nada de F3", async () => {
