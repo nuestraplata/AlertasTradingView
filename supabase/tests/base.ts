@@ -49,3 +49,33 @@ export async function codigoDeError(p: Promise<unknown>): Promise<string | null>
     return (e as { code?: string }).code ?? "sin código";
   }
 }
+
+/**
+ * Imita supabase.rpc(funcion, args) de un cliente con la clave secreta:
+ * llama a la función con argumentos POR NOMBRE (como PostgREST), así un
+ * parámetro mal escrito falla igual que en Supabase.
+ * reloj: la hora que ven las funciones (p_ahora), para que el test no
+ * dependa de si hoy es día hábil. El servidor nunca manda p_ahora.
+ */
+export function rpcComoServidor(db: PGlite, reloj: () => string) {
+  return async (funcion: string, argumentos: Record<string, unknown> = {}) => {
+    if ("p_ahora" in argumentos) throw new Error("el servidor no debe mandar p_ahora");
+    const args = { ...argumentos, p_ahora: reloj() };
+    const nombres = Object.keys(args);
+    if (!/^[a-z_]+$/.test(funcion) || nombres.some((n) => !/^[a-z_]+$/.test(n))) {
+      throw new Error("nombre inválido");
+    }
+    const lista = nombres.map((n, i) => `${n} => $${i + 1}`).join(", ");
+    const valores = nombres.map((n) => {
+      const v = args[n as keyof typeof args];
+      return v !== null && typeof v === "object" ? JSON.stringify(v) : v;
+    });
+    try {
+      const [fila] = await comoRol<{ r: unknown }>(db, "service_role", `select public.${funcion}(${lista}) as r`, valores);
+      return { data: fila.r, error: null };
+    } catch (e) {
+      const err = e as { code?: string; message?: string };
+      return { data: null, error: { code: err.code ?? "", message: err.message ?? "" } };
+    }
+  };
+}
