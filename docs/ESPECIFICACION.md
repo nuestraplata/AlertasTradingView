@@ -36,15 +36,22 @@ eso es responsabilidad de EasyTrading (sección 7).
    la guarda y responde rápido (TradingView corta a los ~3 s).
 2. Filtro de señales (en la web): decide si la alerta pasa a EasyTrading
    como señal pendiente o se descarta, siempre registrando el motivo.
-3. API para EasyTrading (protegida con token propio):
-   - GET señales pendientes
-   - POST "tomar" señal (atómico: pendiente → tomada; si ya fue tomada, falla)
-   - POST resultado de la señal: ejecutada (precio y nominales) o
-     descartada por EasyTrading (con motivo)
-   - POST aviso de posición de CORTO cerrada (sección 8)
+3. API para EasyTrading (protegida con token propio,
+   `Authorization: Bearer <EASYTRADING_TOKEN>`). Contrato completo en
+   [API_EASYTRADING.md](API_EASYTRADING.md):
+   - GET /api/easytrading/senales: señales pendientes
+   - POST /api/easytrading/senales/{id}/tomar (atómico: pendiente → tomada;
+     si ya fue tomada, venció o está en pausa, falla con 409)
+   - POST /api/easytrading/senales/{id}/resultado: ejecutada (precio ARS,
+     nominales y modo PAPER/REAL, solo registro) o descartada por
+     EasyTrading (con motivo)
+   - POST /api/easytrading/posicion-cerrada: aviso de posición de CORTO
+     cerrada (sección 8)
+   El token vive en una variable de entorno de Vercel: se revoca
+   cambiándolo y haciendo Redeploy. Para cortar al instante: "Pausar todo".
 4. Panel web: listas corto/intradía (tildes y anotaciones), tickers,
    alertas con su estado y el resultado de EasyTrading, interruptor
-   "Envío a EasyTrading".
+   "Envío a EasyTrading", configuración (horario de mercado y feriados).
 5. Módulo puente en EasyTrading (se hace en el repo de EasyTrading, aparte).
 
 ## 4. Formato de alerta (campo "Mensaje" de TradingView)
@@ -101,7 +108,10 @@ Por activo, la web guarda SOLO:
 
 Borrar un activo de una lista: la confirmación avisa "Si EasyTrading tiene
 una posición abierta de este activo, sus alertas de venta dejarán de
-llegar. ¿Borrar igual?" (la web no sabe de posiciones).
+llegar. ¿Borrar igual?". La web no sabe de posiciones (no tiene tabla de
+posiciones), así que no puede bloquear el borrado: solo avisa. Proteger
+una posición abierta (stop / TP / trailing) es responsabilidad de
+EasyTrading, que vende aunque el activo no esté en ninguna lista.
 
 Nominales, tope, stop, TP, trailing y modo PAPER/REAL NO están en la web:
 los configura EasyTrading (sección 7).
@@ -109,16 +119,20 @@ los configura EasyTrading (sección 7).
 ## 6. Reglas de la web (filtro de señales)
 
 Toda alerta con clave válida se guarda. Pasa a EasyTrading como señal
-SOLO si se cumple todo lo siguiente; si no, queda descartada con el motivo
-del primer punto que falle:
+(estado de la alerta: "senal") SOLO si se cumple todo lo siguiente, en
+este orden; si no, queda "descartada" con el motivo del primer punto que
+falle:
 
 - Datos válidos (sección 4).
-- Dentro del horario de mercado (configurable). Se usa la hora de llegada
-  al servidor (hora de Argentina), no la "hora" de la alerta. Fines de
-  semana y feriados se descartan; los feriados están en una tabla que Fran
-  carga a mano.
+- Dentro del horario de mercado, configurable en el panel (por defecto
+  11:00 a 17:00; la apertura se incluye, el cierre no). Se usa la hora de
+  llegada al servidor (hora de Argentina), no la "hora" de la alerta.
+  Fines de semana y feriados se descartan; los feriados están en una
+  tabla que Fran carga a mano (pantalla Configuración).
 - No es duplicada: una alerta idéntica (mismo ticker + estrategia + accion)
-  a otra recibida en los últimos 30 s → descartada.
+  a otra recibida en los últimos 30 s → descartada. Cuenta cualquier
+  alerta con datos válidos de los últimos 30 s, aunque haya sido
+  descartada o simulada (ante la duda, una orden de menos).
 - El ticker está en la lista de esa estrategia.
 - Solo COMPRAS: el activo está tildado en esa estrategia (corto: "activo";
   intradía: "operar hoy" de hoy). El tilde nunca filtra ventas: una venta
@@ -126,15 +140,29 @@ del primer punto que falle:
   intradía que quedó abierta de un día para otro). Si no hay nada
   abierto, EasyTrading responde "sin posición abierta".
 - Interruptor "Envío a EasyTrading" ACTIVADO. En pausa → descartada con
-  motivo "pausado".
+  motivo "pausado". Arranca PAUSADO: se activa a mano desde el panel.
+- Alertas simuladas (botón "Simular alerta"): pasan por las mismas reglas,
+  pero solo generan señal si se tilda "enviar a EasyTrading"; si no,
+  quedan descartadas con motivo "Simulada: pasó el filtro, pero no se
+  envió a EasyTrading.". La señal lleva origen "simulada" para que
+  EasyTrading no la ejecute en REAL.
+
+Todo el filtro corre en una sola transacción de la base (función
+registrar_alerta): dos alertas idénticas que llegan a la vez no pueden
+pasar las dos.
 
 Señales:
 
 - Una alerta genera como máximo UNA señal (idempotencia por alerta).
-- La señal lleva: alerta_id, ticker BYMA, estrategia, compra/venta, hora y
-  precio USD (solo registro).
+- La señal lleva: alerta_id, origen, ticker BYMA (y USA), estrategia,
+  compra/venta, hora y precio USD (solo registro).
 - Toda señal vence a los 60 s si EasyTrading no la tomó → "vencida"; no se
-  ejecuta nunca después.
+  ejecuta nunca después. No hace falta cron: la base las marca vencidas
+  cuando EasyTrading consulta, y "tomar" nunca entrega una vencida.
+- En pausa, EasyTrading no recibe señales y no puede tomar las pendientes
+  (que vencen solas).
+- Los 60 s de vencimiento y los 30 s de duplicadas son fijos (no se
+  configuran desde el panel).
 - El resultado que devuelve EasyTrading (ejecutada con precio y nominales,
   o descartada con su motivo) se guarda con la señal y se muestra junto a
   la alerta. La web no guarda posiciones ni calcula resultados.
@@ -187,11 +215,14 @@ Decisiones abiertas (a resolver en EasyTrading):
 EasyTrading llama a la API de la web (no escribe directo en Supabase):
 
 - POST /api/easytrading/posicion-cerrada, con el mismo token que el resto
-  de la API. Cuerpo: ticker BYMA, estrategia ("corto"), hora del cierre y,
-  si lo hubo, el ID de la señal que lo cerró.
+  de la API. Cuerpo: ticker BYMA, estrategia ("corto"), hora del cierre
+  (ISO 8601 con zona horaria) y, si lo hubo, el ID de la señal que lo
+  cerró.
 - La web busca el activo por ticker BYMA (vía "tickers") en la lista de
   corto, lo destilda y registra el aviso. Si ya estaba destildado, no hace
   nada y responde OK (idempotente: EasyTrading puede reintentar).
+- El mismo aviso (ticker + hora de cierre) repetido no vuelve a destildar:
+  si Fran lo tildó de nuevo en el medio, se respeta.
 - Si el ticker no está en la lista de corto, responde OK y registra el
   aviso con motivo "no está en la lista".
 
@@ -204,12 +235,14 @@ solo lugar.
 
 tickers (ticker_usa → ticker_byma), activos (ticker_usa, estrategia,
 activo, operar_hoy_fecha, onda, sub_onda, notas), alertas (payload crudo,
-hora, ticker, precio USD, acción, estado, motivo), intentos_rechazados
-(hora, IP; sin payload), senales (alerta_id único, ticker BYMA,
-estrategia, acción, estado, vence_en, resultado de EasyTrading: precio,
-nominales, motivo), avisos_easytrading (cierres de posición de corto),
-configuracion (horario, vencimiento, envío a EasyTrading activado),
-feriados (fecha, descripción).
+hora, ticker, precio USD, acción, estado recibida (F2) / senal /
+descartada, motivo), intentos_rechazados (hora, IP; sin payload), senales
+(alerta_id único, origen, ticker BYMA, estrategia, acción, estado
+pendiente / tomada / vencida / ejecutada / descartada, vence_en,
+resultado de EasyTrading: precio ARS, nominales, modo, motivo),
+avisos_easytrading (cierres de posición de corto), configuracion (fila
+única: envío a EasyTrading activado, horario, última consulta de
+EasyTrading), feriados (fecha, descripción).
 No hay tabla de posiciones.
 Cripto: tablas propias en su fase.
 
@@ -225,10 +258,11 @@ WEB:
   para evitar que el plan Free pause el proyecto por inactividad.
 - F3: filtro de señales + vencimiento + API EasyTrading (señales, tomar,
   resultado, aviso de corto cerrado → destildar) + resultado junto a cada
-  alerta.
+  alerta. Migración 4.
   - Interruptor "Envío a EasyTrading: ACTIVADO / PAUSADO", visible en
     todas las pantallas; en pausa las alertas se siguen guardando,
     descartadas con motivo "pausado".
+  - Pantalla Configuración: horario de mercado y feriados.
 
 EASYTRADING (en su propio repo):
 

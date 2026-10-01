@@ -8,8 +8,12 @@ devuelve el resultado. La web no arma órdenes ni guarda posiciones.
 - Especificación completa: [docs/ESPECIFICACION.md](docs/ESPECIFICACION.md)
 - Stack: Next.js 16 + Supabase (Postgres + Auth) + Vercel, región São Paulo.
 
-**Estado:** Fase 1 (login, listas corto/intradía con tilde rápido, mapeo de
-tickers). El webhook y la API de EasyTrading llegan en F2/F3.
+- Contrato de la API para EasyTrading: [docs/API_EASYTRADING.md](docs/API_EASYTRADING.md)
+
+**Estado:** Fase 3 (login, listas corto/intradía, tickers, webhook de
+TradingView, filtro de señales, API para EasyTrading, interruptor "Envío
+a EasyTrading", horario y feriados). El módulo puente de EasyTrading se
+hace en su propio repo (F4).
 
 ---
 
@@ -76,6 +80,7 @@ En https://supabase.com, dentro del proyecto (región **South America (São Paul
    1. `20260926190000_tickers_y_activos.sql`
    2. `20260927120000_activos_solo_tilde_y_notas.sql`
    3. `20260927180000_alertas.sql`
+   4. `20261001120000_senales.sql`
 
    Cada una tiene que decir *"Success. No rows returned"*. Son
    todo-o-nada: si una falla, no deja nada a medias. **No las corras dos
@@ -104,6 +109,24 @@ En https://supabase.com, dentro del proyecto (región **South America (São Paul
    ```
 
    2 filas con `rls = true`, `servidor_inserta = true`, `panel_inserta = false`.
+
+   Y las de F3 (migración 4):
+
+   ```sql
+   select c.relname as tabla, c.relrowsecurity as rls,
+          has_table_privilege('anon', c.oid, 'SELECT') as anon_lee,
+          has_table_privilege('authenticated', c.oid, 'SELECT') as panel_lee
+   from pg_class c
+   where c.relnamespace = 'public'::regnamespace
+     and c.relname in ('configuracion', 'feriados', 'senales', 'avisos_easytrading')
+   order by 1;
+
+   select envio_activado, hora_apertura, hora_cierre from public.configuracion;
+   ```
+
+   4 filas con `rls = true`, `anon_lee = false`, `panel_lee = true`; y la
+   configuración: `false`, `11:00:00`, `17:00:00` (el envío arranca
+   **pausado**).
 
 ### 5. Variables de entorno (`.env.local`)
 
@@ -150,6 +173,18 @@ WEBHOOK_CLAVE=<64 caracteres aleatorios>
   proyecto. Generalo con el mismo comando (un valor **distinto** de
   `WEBHOOK_CLAVE`). Vercel lo manda solo en cada ejecución.
 
+#### Variable de F3 (API para EasyTrading)
+
+```
+EASYTRADING_TOKEN=<64 caracteres aleatorios>
+```
+
+- Token con el que EasyTrading se autentica contra `/api/easytrading/*`.
+  Generalo con el mismo comando (un valor **distinto** de los otros dos).
+- Si falta o tiene menos de 24 caracteres, la API responde 500 y lo
+  registra en la consola del servidor.
+- En EasyTrading se configura el **mismo** valor (en F4).
+
 #### Cron diario (keepalive)
 
 `vercel.json` programa `GET /api/cron/keepalive` una vez por día
@@ -192,13 +227,17 @@ del paso 4.2.
 
 Antes de cada commit: `npm test`, `npm run lint` y `npm run build` en verde.
 
+`npm test` también corre las migraciones en un Postgres en memoria
+(PGlite) y prueba el filtro de señales, la API y los permisos por rol
+contra el SQL real. No toca Supabase.
+
 ---
 
 ## Deploy en Vercel
 
 1. **Add New → Project** → importá el repo de GitHub (si no aparece:
    **Adjust GitHub App Permissions** y dale acceso al repo).
-2. **Antes del primer deploy**, en **Environment Variables**, cargá las 5
+2. **Antes del primer deploy**, en **Environment Variables**, cargá las 6
    variables para **Production** y **Preview**:
 
    | Variable | Valor | Sensitive |
@@ -208,12 +247,14 @@ Antes de cada commit: `npm test`, `npm run lint` y `npm run build` en verde.
    | `SUPABASE_SECRET_KEY` | `sb_secret_…` | **Sí** |
    | `WEBHOOK_CLAVE` | secreto propio de producción (≥ 24) | **Sí** |
    | `CRON_SECRET` | secreto propio de producción (≥ 24) | **Sí** |
+   | `EASYTRADING_TOKEN` | secreto propio de producción (≥ 24) | **Sí** |
 
    - Las `NEXT_PUBLIC_*` se incorporan **al build**: si cambian, hace falta
      **Redeploy**. Las demás se leen en cada pedido, pero también requieren
      redeploy para tomar el valor nuevo.
-   - `WEBHOOK_CLAVE` y `CRON_SECRET` de producción son **distintos** de los
-     de `.env.local` y se guardan en un gestor de contraseñas.
+   - `WEBHOOK_CLAVE`, `CRON_SECRET` y `EASYTRADING_TOKEN` de producción son
+     **distintos** de los de `.env.local` y se guardan en un gestor de
+     contraseñas.
 3. La región (`gru1`, São Paulo) la fija `vercel.json` y la versión de Node
    (24.x) la fija `package.json`: no hay que tocarlas. Se verifica en el
    deploy → **Functions**: región `gru1`.
@@ -242,6 +283,33 @@ Remove-Variable cron, sec
 
 Tiene que responder `ok : True`.
 
+### Probar la API de EasyTrading desde PowerShell
+
+Sirve en local (`http://localhost:3000`) o en producción. Pide el token
+sin mostrarlo:
+
+```powershell
+$url = (Read-Host "URL (http://localhost:3000 o https://...vercel.app)").TrimEnd("/")
+$sec = Read-Host "EASYTRADING_TOKEN" -AsSecureString
+$h = @{ Authorization = "Bearer " + [System.Net.NetworkCredential]::new("", $sec).Password }
+
+# 1. Señales pendientes
+Invoke-RestMethod -Uri "$url/api/easytrading/senales" -Headers $h | ConvertTo-Json -Depth 5
+
+# 2. Tomar la señal 1 (cambiá el número)
+Invoke-RestMethod -Method Post -Uri "$url/api/easytrading/senales/1/tomar" -Headers $h
+
+# 3. Informar el resultado
+$cuerpo = @{ estado = "ejecutada"; precio_ars = 15230.5; nominales = 1; modo = "PAPER" } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri "$url/api/easytrading/senales/1/resultado" -Headers $h -ContentType "application/json" -Body $cuerpo
+
+Remove-Variable h, sec
+```
+
+Un 409 (`no_disponible` / `pausado`) llega a PowerShell como error rojo
+con el JSON adentro: es la respuesta esperada cuando la señal ya se tomó,
+venció o el envío está en pausa.
+
 ---
 
 ## Estructura
@@ -251,17 +319,27 @@ app/
   login/                 Pantalla de login (Server Action)
   (panel)/               Todo lo que exige sesión (layout con pestañas)
     [estrategia]/        /corto y /intradia: lista, alta (nuevo/), edición ([id]/)
+    alertas/             Alertas con su señal y el resultado de EasyTrading
+    configuracion/       Horario de mercado y feriados
     tickers/             Mapeo ticker USA → CEDEAR
+  api/webhook/           Webhook de TradingView
+  api/easytrading/       API para EasyTrading (docs/API_EASYTRADING.md)
+  api/cron/              Cron diario (keepalive)
 components/              Componentes compartidos (avisos, navegación, activos)
 lib/
   activos/               Validación (zod), tilde / "operar hoy", filas
   auth/                  Rutas públicas, sesión, credenciales
+  alertas/               Procesar y registrar alertas, filtros de la pantalla
+  configuracion/         Validación de horario y feriados
   db/                    Traducción de errores de la base
+  easytrading/           Autenticación y validación de la API
+  senales/               Cómo se muestra cada señal
   supabase/              Clientes de Supabase y validación de variables
   tickers/               "Usado en" de cada ticker
   fechas.ts              Fecha de hoy en Argentina
 proxy.ts                 (Next 16: ex "middleware") exige login y refresca la sesión
 supabase/migrations/     SQL que se corre a mano en Supabase, en orden
+supabase/tests/          Tests de las migraciones en Postgres (PGlite, en memoria)
 docs/ESPECIFICACION.md   Qué hace la app y por qué
 ```
 
