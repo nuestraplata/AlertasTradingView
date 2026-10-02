@@ -3,6 +3,7 @@
 import { useActionState, useState } from "react";
 import { simularAlerta, type EstadoSimulacion } from "@/app/(panel)/alertas/actions";
 import { useAviso } from "@/components/Avisos";
+import { pasoElFiltro } from "@/lib/alertas/registrar";
 
 /** El formato de la especificación (§4), tal como va en TradingView. */
 const MENSAJE_EJEMPLO = `{
@@ -21,7 +22,9 @@ type Modo = "simple" | "json";
 
 /**
  * Panel para probar sin TradingView. Pasa por el mismo camino que el
- * webhook; la alerta queda marcada como "Simulada".
+ * webhook (incluido el filtro de señales); la alerta queda marcada como
+ * "Simulada". Solo genera una señal real para EasyTrading si se tilda
+ * "enviar" (por defecto, no: muestra qué habría pasado).
  */
 export function SimularAlerta({ tickers }: { tickers: string[] }) {
   const avisar = useAviso();
@@ -29,10 +32,12 @@ export function SimularAlerta({ tickers }: { tickers: string[] }) {
     const r = await simularAlerta(prev, fd);
     if (r?.ok) {
       avisar(
-        r.estado === "recibida"
-          ? `Alerta simulada #${r.id} registrada como Recibida.`
-          : `Alerta simulada #${r.id} registrada como Descartada.`,
-        r.estado === "recibida" ? "ok" : "error",
+        r.estado === "senal"
+          ? `Alerta simulada #${r.id}: señal #${r.senalId} enviada a EasyTrading.`
+          : pasoElFiltro(r)
+            ? `Alerta simulada #${r.id}: pasó el filtro (no se envió).`
+            : `Alerta simulada #${r.id} registrada como Descartada.`,
+        pasoElFiltro(r) ? "ok" : "error",
       );
     }
     return r;
@@ -141,6 +146,14 @@ export function SimularAlerta({ tickers }: { tickers: string[] }) {
           ))}
         </datalist>
 
+        <label className="flex items-start gap-2 text-xs">
+          <input type="checkbox" name="enviar" className="mt-0.5" />
+          <span>
+            Si pasa el filtro, <strong>enviarla a EasyTrading</strong> como señal (marcada “simulada”).
+            Sin este tilde solo se muestra qué habría pasado.
+          </span>
+        </label>
+
         <div className="flex flex-wrap items-center gap-3">
           <button
             type="submit"
@@ -149,18 +162,20 @@ export function SimularAlerta({ tickers }: { tickers: string[] }) {
           >
             {enviando ? "Enviando…" : "Simular"}
           </button>
-          <span className="text-xs opacity-60">Queda registrada como “Simulada”. No genera señales.</span>
+          <span className="text-xs opacity-60">Queda registrada como “Simulada”.</span>
         </div>
 
         {estado && (
           <p
             role={estado.ok ? "status" : "alert"}
-            className={`text-sm ${estado.ok && estado.estado === "recibida" ? "text-emerald-700 dark:text-emerald-400" : "text-red-600"}`}
+            className={`text-sm ${estado.ok && pasoElFiltro(estado) ? "text-emerald-700 dark:text-emerald-400" : "text-red-600"}`}
           >
             {estado.ok
-              ? estado.estado === "recibida"
-                ? `✓ #${estado.id} Recibida.`
-                : `✗ #${estado.id} Descartada: ${estado.motivo}`
+              ? estado.estado === "senal"
+                ? `✓ #${estado.id}: señal #${estado.senalId} enviada a EasyTrading (vence en 60 s).`
+                : pasoElFiltro(estado)
+                  ? `✓ #${estado.id}: pasó el filtro. No se envió a EasyTrading (no estaba tildado “enviar”).`
+                  : `✗ #${estado.id} Descartada: ${estado.motivo}`
               : `✗ ${estado.error}`}
           </p>
         )}

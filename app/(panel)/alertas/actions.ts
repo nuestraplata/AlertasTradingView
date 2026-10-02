@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { procesarAlerta } from "@/lib/alertas/procesar";
-import { registrarResultado } from "@/lib/alertas/registrar";
+import { registrarResultado, type EstadoRegistrado } from "@/lib/alertas/registrar";
 import { armarSimulacion, type Simulacion } from "@/lib/alertas/simular";
 import { clienteConSesion } from "@/lib/auth/sesion";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -11,21 +11,24 @@ import { validarSecreto } from "@/lib/supabase/env";
 export type EstadoSimulacion =
   | {
       ok: true;
-      estado: "recibida" | "descartada";
+      estado: EstadoRegistrado;
       id: number;
       motivo: string | null;
+      senalId: number | null;
       valores: Record<string, string>;
     }
   | { ok: false; error: string; valores?: Record<string, string> }
   | undefined;
 
-const CAMPOS = ["modo", "estrategia", "accion", "ticker", "precio", "json"] as const;
+const CAMPOS = ["modo", "estrategia", "accion", "ticker", "precio", "json", "enviar"] as const;
 
 /**
  * "Simular alerta": mismo camino que el webhook (procesarAlerta +
- * registrarResultado), con origen "simulada". La clave la pone el
- * servidor. Los rechazos no se registran en intentos_rechazados (no son
- * pedidos externos): solo se muestran.
+ * registrarResultado → filtro de señales), con origen "simulada". La
+ * clave la pone el servidor. Los rechazos no se registran en
+ * intentos_rechazados (no son pedidos externos): solo se muestran.
+ * Si pasa el filtro, genera una señal para EasyTrading SOLO si se tildó
+ * "enviar"; si no, queda descartada con ese motivo.
  */
 export async function simularAlerta(
   _prev: EstadoSimulacion,
@@ -73,17 +76,20 @@ export async function simularAlerta(
     return { ok: false, error: texto, valores };
   }
 
-  const r = await registrarResultado(supabase, resultado, null);
-  if (r.http !== 200 || typeof r.cuerpo.id !== "number") {
+  const r = await registrarResultado(supabase, resultado, null, {
+    enviarSimulada: valores.enviar === "on",
+  });
+  if (r.http !== 200 || !r.registro) {
     return { ok: false, error: "No se pudo guardar la alerta simulada. Probá de nuevo.", valores };
   }
 
   revalidatePath("/alertas");
   return {
     ok: true,
-    id: r.cuerpo.id,
-    estado: resultado.alerta.estado,
-    motivo: resultado.alerta.motivo,
+    id: r.registro.alerta_id,
+    estado: r.registro.estado,
+    motivo: r.registro.motivo,
+    senalId: r.registro.senal_id,
     // React resetea el form: se devuelven para repetir cambiando un dato.
     valores,
   };

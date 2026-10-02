@@ -24,8 +24,9 @@ const GRUPOS: {
   estado: {
     titulo: "Estado",
     opciones: [
-      { valor: "recibida", texto: "Recibida" },
+      { valor: "senal", texto: "Señal" },
       { valor: "descartada", texto: "Descartada" },
+      { valor: "recibida", texto: "Recibida (F2)" },
     ],
   },
   origen: {

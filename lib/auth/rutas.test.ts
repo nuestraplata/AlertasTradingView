@@ -2,12 +2,12 @@ import { describe, expect, it } from "vitest";
 import { destinoSeguro, esRutaPublica } from "./rutas";
 
 describe("esRutaPublica", () => {
-  it.each(["/login", "/api/webhook", "/api/webhook/x", "/api/easytrading/ordenes", "/api/cron/keepalive"])(
+  it.each(["/login", "/api/webhook", "/api/webhook/x", "/api/cron/keepalive"])(
     "%s es pública",
     (ruta) => expect(esRutaPublica(ruta)).toBe(true),
   );
 
-  it.each(["/", "/corto", "/intradia", "/alertas", "/loginx", "/api/webhookx", "/api/otra", "/api/cronx", "/login-falso"])(
+  it.each(["/", "/corto", "/intradia", "/alertas", "/loginx", "/api/webhookx", "/api/otra", "/api/cronx", "/login-falso", "/api/easytrading/senales", "/configuracion"])(
     "%s exige sesión",
     (ruta) => expect(esRutaPublica(ruta)).toBe(false),
   );

@@ -3,6 +3,7 @@ import { NOMBRE_ESTRATEGIA, type Estrategia } from "@/lib/activos/schema";
 import type { EstadoAlerta } from "@/lib/alertas/filtros";
 import type { Accion, Origen } from "@/lib/alertas/procesar";
 import { formatearMomentoAR } from "@/lib/fechas";
+import { COLUMNAS_SENAL, describirSenal, type SenalFila, type Tono } from "@/lib/senales/estado";
 
 /** Fila de public.alertas tal como la pide la pantalla. */
 export type AlertaFila = {
@@ -16,10 +17,11 @@ export type AlertaFila = {
   estado: EstadoAlerta;
   motivo: string | null;
   payload: Record<string, unknown>;
+  /** La señal que generó (como máximo una), con el resultado de EasyTrading. */
+  senales: SenalFila | null;
 };
 
-export const COLUMNAS_ALERTA =
-  "id, recibida_en, origen, ticker, estrategia, accion, precio_usd, estado, motivo, payload";
+export const COLUMNAS_ALERTA = `id, recibida_en, origen, ticker, estrategia, accion, precio_usd, estado, motivo, payload, senales(${COLUMNAS_SENAL})`;
 
 function AccionTag({ accion }: { accion: Accion | null }) {
   if (!accion) return <span className="opacity-40">—</span>;
@@ -31,12 +33,45 @@ function AccionTag({ accion }: { accion: Accion | null }) {
 }
 
 function EstadoTag({ estado }: { estado: EstadoAlerta }) {
-  return estado === "recibida" ? (
-    <span className="rounded bg-current/10 px-1.5 py-0.5 text-xs">Recibida</span>
-  ) : (
-    <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-xs text-amber-700 dark:text-amber-400">
-      Descartada
-    </span>
+  switch (estado) {
+    case "senal":
+      return <span className="rounded bg-sky-600 px-1.5 py-0.5 text-xs font-medium text-white">Señal</span>;
+    case "recibida":
+      return (
+        <span className="rounded bg-current/10 px-1.5 py-0.5 text-xs" title="F2: todavía no pasaba por el filtro">
+          Recibida (F2)
+        </span>
+      );
+    case "descartada":
+      return (
+        <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-xs text-amber-700 dark:text-amber-400">
+          Descartada
+        </span>
+      );
+  }
+}
+
+const COLOR_TONO: Record<Tono, string> = {
+  espera: "border-sky-600/40 bg-sky-600/10",
+  ok: "border-emerald-600/40 bg-emerald-600/10",
+  error: "border-red-600/40 bg-red-600/10",
+  neutro: "border-current/20 bg-current/5",
+};
+
+/** Estado de la señal y lo que informó EasyTrading. */
+function Senal({ senal, ahora }: { senal: SenalFila | null; ahora: Date }) {
+  if (!senal) return null;
+  const v = describirSenal(senal, ahora);
+  return (
+    <div className={`mt-1 rounded border px-2 py-1 text-xs ${COLOR_TONO[v.tono]}`}>
+      <p className="font-medium">
+        {v.etiqueta} <span className="font-normal opacity-60">#{senal.id}</span>
+      </p>
+      {v.detalle && <p>{v.detalle}</p>}
+      {senal.resultado_en && (
+        <p className="opacity-60">Informado {formatearMomentoAR(senal.resultado_en, ahora)}</p>
+      )}
+    </div>
   );
 }
 
@@ -91,6 +126,7 @@ export function ListaAlertas({ alertas, ahora }: { alertas: AlertaFila[]; ahora:
               <td className="px-2 py-2 text-right font-mono">{formatearPrecio(a.precio_usd)}</td>
               <td className="px-2 py-2">
                 <EstadoTag estado={a.estado} />
+                <Senal senal={a.senales} ahora={ahora} />
               </td>
               <td className="px-2 py-2">
                 {a.motivo && <p className="mb-1 text-xs">{a.motivo}</p>}
@@ -120,6 +156,7 @@ export function ListaAlertas({ alertas, ahora }: { alertas: AlertaFila[]; ahora:
               <OrigenTag origen={a.origen} />
             </div>
             {a.motivo && <p className="text-xs">{a.motivo}</p>}
+            <Senal senal={a.senales} ahora={ahora} />
             <Mensaje payload={a.payload} />
           </li>
         ))}

@@ -8,8 +8,13 @@ devuelve el resultado. La web no arma órdenes ni guarda posiciones.
 - Especificación completa: [docs/ESPECIFICACION.md](docs/ESPECIFICACION.md)
 - Stack: Next.js 16 + Supabase (Postgres + Auth) + Vercel, región São Paulo.
 
-**Estado:** Fase 1 (login, listas corto/intradía con tilde rápido, mapeo de
-tickers). El webhook y la API de EasyTrading llegan en F2/F3.
+- Contrato con EasyTrading (conexión directa a Postgres): [docs/API_EASYTRADING.md](docs/API_EASYTRADING.md)
+
+**Estado:** Fase 3 (login, listas corto/intradía, tickers, webhook de
+TradingView, filtro de señales, funciones para EasyTrading con su propio
+usuario de Postgres, interruptor "Envío a EasyTrading", horario y
+feriados). El módulo puente de EasyTrading se
+hace en su propio repo (F4).
 
 ---
 
@@ -76,6 +81,8 @@ En https://supabase.com, dentro del proyecto (región **South America (São Paul
    1. `20260926190000_tickers_y_activos.sql`
    2. `20260927120000_activos_solo_tilde_y_notas.sql`
    3. `20260927180000_alertas.sql`
+   4. `20261001120000_senales.sql`
+   5. `20261002120000_easytrading_bot.sql` (después de la 4)
 
    Cada una tiene que decir *"Success. No rows returned"*. Son
    todo-o-nada: si una falla, no deja nada a medias. **No las corras dos
@@ -104,6 +111,73 @@ En https://supabase.com, dentro del proyecto (región **South America (São Paul
    ```
 
    2 filas con `rls = true`, `servidor_inserta = true`, `panel_inserta = false`.
+
+   Y las de F3 (migración 4):
+
+   ```sql
+   select c.relname as tabla, c.relrowsecurity as rls,
+          has_table_privilege('anon', c.oid, 'SELECT') as anon_lee,
+          has_table_privilege('authenticated', c.oid, 'SELECT') as panel_lee
+   from pg_class c
+   where c.relnamespace = 'public'::regnamespace
+     and c.relname in ('configuracion', 'feriados', 'senales', 'avisos_easytrading')
+   order by 1;
+
+   select envio_activado, hora_apertura, hora_cierre from public.configuracion;
+   ```
+
+   4 filas con `rls = true`, `anon_lee = false`, `panel_lee = true`; y la
+   configuración: `false`, `11:00:00`, `17:00:00` (el envío arranca
+   **pausado**).
+
+   Y el usuario de EasyTrading (migración 5). Qué funciones puede ejecutar
+   fuera del catálogo de Postgres:
+
+   ```sql
+   select n.nspname || '.' || p.oid::regprocedure::text as funcion
+   from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname not in ('pg_catalog', 'information_schema')
+     and has_schema_privilege('easytrading_bot', n.oid, 'USAGE')
+     and has_function_privilege('easytrading_bot', p.oid, 'EXECUTE')
+   order by 1;
+   ```
+
+   Tienen que salir **exactamente 4**, todas de `public`:
+   `easytrading_pendientes()`, `easytrading_posicion_cerrada(…)`,
+   `easytrading_resultado(…)` y `easytrading_tomar(bigint)`. Si sale
+   alguna más (por ejemplo de `extensions`), avisá antes de seguir.
+
+   Y que no tenga acceso a ninguna tabla de ningún esquema:
+
+   ```sql
+   select c.oid::regclass as tabla
+   from pg_class c join pg_namespace n on n.oid = c.relnamespace
+   where n.nspname not in ('pg_catalog', 'information_schema')
+     and c.relkind in ('r', 'v', 'm', 'p', 'f')
+     and has_table_privilege('easytrading_bot', c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE');
+   ```
+
+   Tiene que devolver **0 filas**.
+
+5. **Contraseña del usuario de EasyTrading** (la migración 5 lo crea
+   **sin** login ni contraseña). Generá una contraseña con el mismo
+   comando de PowerShell de las claves (64 caracteres, solo letras y
+   números: no hace falta escaparla) y en **SQL Editor → New query**
+   corré, reemplazando el valor:
+
+   ```sql
+   alter role easytrading_bot with login password 'PEGAR_ACA_LA_CONTRASEÑA';
+   ```
+
+   - Corrélo en una pestaña nueva y **no la guardes** (los snippets
+     guardados quedan en Supabase). Después cerrá la pestaña.
+   - Guardá la contraseña en el gestor de contraseñas: la usa EasyTrading
+     (F4), no esta web.
+   - Para cambiarla: el mismo comando con otra. Para cortarle el acceso:
+     `alter role easytrading_bot nologin;`
+   - Comprobar: `select rolcanlogin from pg_roles where rolname = 'easytrading_bot';` → `true`.
+   - Probar la conexión desde la PC: ver
+     [docs/API_EASYTRADING.md](docs/API_EASYTRADING.md#probar-la-conexión-a-mano-psql).
 
 ### 5. Variables de entorno (`.env.local`)
 
@@ -192,6 +266,11 @@ del paso 4.2.
 
 Antes de cada commit: `npm test`, `npm run lint` y `npm run build` en verde.
 
+`npm test` también corre las migraciones en un Postgres en memoria
+(PGlite) y prueba el filtro de señales, las funciones de EasyTrading y
+los permisos de cada rol (incluido `easytrading_bot`) contra el SQL real.
+No toca Supabase.
+
 ---
 
 ## Deploy en Vercel
@@ -214,6 +293,9 @@ Antes de cada commit: `npm test`, `npm run lint` y `npm run build` en verde.
      redeploy para tomar el valor nuevo.
    - `WEBHOOK_CLAVE` y `CRON_SECRET` de producción son **distintos** de los
      de `.env.local` y se guardan en un gestor de contraseñas.
+   - EasyTrading no usa variables de Vercel: se conecta directo a
+     Postgres con `easytrading_bot` (si quedó cargada `EASYTRADING_TOKEN`
+     de una versión anterior, se puede borrar).
 3. La región (`gru1`, São Paulo) la fija `vercel.json` y la versión de Node
    (24.x) la fija `package.json`: no hay que tocarlas. Se verifica en el
    deploy → **Functions**: región `gru1`.
@@ -251,17 +333,25 @@ app/
   login/                 Pantalla de login (Server Action)
   (panel)/               Todo lo que exige sesión (layout con pestañas)
     [estrategia]/        /corto y /intradia: lista, alta (nuevo/), edición ([id]/)
+    alertas/             Alertas con su señal y el resultado de EasyTrading
+    configuracion/       Horario de mercado y feriados
     tickers/             Mapeo ticker USA → CEDEAR
+  api/webhook/           Webhook de TradingView
+  api/cron/              Cron diario (keepalive)
 components/              Componentes compartidos (avisos, navegación, activos)
 lib/
   activos/               Validación (zod), tilde / "operar hoy", filas
   auth/                  Rutas públicas, sesión, credenciales
+  alertas/               Procesar y registrar alertas, filtros de la pantalla
+  configuracion/         Validación de horario y feriados
   db/                    Traducción de errores de la base
+  senales/               Cómo se muestra cada señal
   supabase/              Clientes de Supabase y validación de variables
   tickers/               "Usado en" de cada ticker
   fechas.ts              Fecha de hoy en Argentina
 proxy.ts                 (Next 16: ex "middleware") exige login y refresca la sesión
 supabase/migrations/     SQL que se corre a mano en Supabase, en orden
+supabase/tests/          Tests de las migraciones en Postgres (PGlite, en memoria)
 docs/ESPECIFICACION.md   Qué hace la app y por qué
 ```
 

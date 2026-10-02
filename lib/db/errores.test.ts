@@ -84,3 +84,24 @@ describe("traducirErrorDb", () => {
     expect(traducirErrorDb({})).toBe("Error inesperado al guardar. Probá de nuevo.");
   });
 });
+
+describe("restricciones de F3", () => {
+  it("feriado repetido", () => {
+    expect(
+      traducirErrorDb({
+        code: "23505",
+        message: 'duplicate key value violates unique constraint "feriados_pkey"',
+        details: "Key (fecha)=(2026-12-25) already exists.",
+      }),
+    ).toBe("Ya hay un feriado cargado el 2026-12-25.");
+  });
+
+  it("horario al revés", () => {
+    expect(
+      traducirErrorDb({
+        code: "23514",
+        message: 'new row for relation "configuracion" violates check constraint "configuracion_horario_valido"',
+      }),
+    ).toBe("El cierre tiene que ser después de la apertura.");
+  });
+});

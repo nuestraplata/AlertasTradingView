@@ -8,6 +8,7 @@ const PESTANIAS = [
   { href: "/corto", texto: "Corto plazo" },
   { href: "/intradia", texto: "Intradía" },
   { href: "/tickers", texto: "Tickers" },
+  { href: "/configuracion", texto: "Configuración" },
 ] as const;
 
 export function Navegacion() {

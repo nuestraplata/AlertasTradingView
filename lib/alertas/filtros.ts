@@ -4,7 +4,8 @@ import { ACCIONES, type Accion, type Origen } from "./procesar";
 // Filtros de la pantalla Alertas. Viven en la URL (?estrategia=corto&...),
 // así funcionan sin JavaScript, se pueden guardar y el botón "atrás" anda.
 
-export const ESTADOS = ["recibida", "descartada"] as const;
+// "recibida": alertas de F2, que todavía no pasaban por el filtro de señales.
+export const ESTADOS = ["senal", "descartada", "recibida"] as const;
 export const ORIGENES = ["tradingview", "simulada"] as const;
 export type EstadoAlerta = (typeof ESTADOS)[number];
 
