@@ -75,7 +75,7 @@ select public.easytrading_pendientes();
 ```
 
 Sin parámetros. Llamarla cada **2 a 3 s**, solo en horario de mercado
-(11:00–17:00 de Argentina, o el configurado en el panel). Además vence las
+(10:30–17:00 de Argentina, o el configurado en el panel). Además vence las
 señales de más de 60 s y le muestra al panel que EasyTrading está
 conectado.
 

@@ -131,8 +131,8 @@ este orden; si no, queda "descartada" con el motivo del primer punto que
 falle:
 
 - Datos válidos (sección 4).
-- Dentro del horario de mercado, configurable en el panel (por defecto
-  11:00 a 17:00; la apertura se incluye, el cierre no). Se usa la hora de
+- Dentro del horario de mercado, configurable en el panel (hoy 10:30 a
+  17:00; la apertura se incluye, el cierre no). Se usa la hora de
   llegada al servidor (hora de Argentina), no la "hora" de la alerta.
   Fines de semana y feriados se descartan; los feriados están en una
   tabla que Fran carga a mano (pantalla Configuración).
